@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 
-static class QueueStore
+sealed class QueueStore
 {
-    private static readonly ConcurrentDictionary<string, InMemoryQueue> _queues = new();
+    private readonly ConcurrentDictionary<string, InMemoryQueue> _queues = new();
 
-    public static InMemoryQueue Get(string address) => _queues.GetOrAdd(address, _ => new InMemoryQueue());
+    public InMemoryQueue Get(string address) => _queues.GetOrAdd(address, _ => new InMemoryQueue());
 }

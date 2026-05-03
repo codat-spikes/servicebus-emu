@@ -1,5 +1,3 @@
-using Amqp;
-using Amqp.Handler;
 using Amqp.Listener;
 using Amqp.Sasl;
 using Amqp.Types;
@@ -8,13 +6,8 @@ sealed class AmqpServer
 {
     public const string LocalConnectionString = "Endpoint=sb://localhost;SharedAccessKeyName=dev;SharedAccessKey=dev;UseDevelopmentEmulator=true;";
 
-    private readonly ContainerHost _host;
-    private const string _connString = "amqp://127.0.0.1:5672";
-
-    public AmqpServer()
-    {
-        _host = new ContainerHost([_connString]);
-    }
+    private readonly QueueStore _queues = new();
+    private readonly ContainerHost _host = new(["amqp://127.0.0.1:5672"]);
 
     public void Start()
     {
@@ -23,19 +16,6 @@ sealed class AmqpServer
         listener.HandlerFactory = _ => new LockTokenHandler();
         _host.Open();
         _host.RegisterRequestProcessor("$cbs", new CbsRequestProcessor());
-        _host.RegisterLinkProcessor(new QueueLinkProcessor());
-    }
-}
-
-sealed class LockTokenHandler : IHandler
-{
-    public bool CanHandle(EventId id) => id == EventId.SendDelivery;
-
-    public void Handle(Event @event)
-    {
-        if (@event.Context is IDelivery delivery && delivery.Tag is null)
-        {
-            delivery.Tag = Guid.NewGuid().ToByteArray();
-        }
+        _host.RegisterLinkProcessor(new QueueLinkProcessor(_queues));
     }
 }

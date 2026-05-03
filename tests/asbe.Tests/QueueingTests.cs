@@ -12,16 +12,17 @@ public sealed class QueueingTests
     [MemberData(nameof(Transports))]
     public async Task SendAndReceive_RoundTripsMessageBody(Transport transport)
     {
-        var (client, queue) = await Setup(transport);
+        var ct = TestContext.Current.CancellationToken;
+        var (client, queue) = await Setup(transport, ct);
 
         await using var sender = client.CreateSender(queue);
-        await sender.SendMessageAsync(new ServiceBusMessage("Hello world"));
+        await sender.SendMessageAsync(new ServiceBusMessage("Hello world"), ct);
 
         await using var receiver = client.CreateReceiver(queue, new ServiceBusReceiverOptions
         {
             ReceiveMode = ServiceBusReceiveMode.ReceiveAndDelete,
         });
-        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
 
         Assert.Equal("Hello world", msg?.Body.ToString());
     }
@@ -30,18 +31,19 @@ public sealed class QueueingTests
     [MemberData(nameof(Transports))]
     public async Task PeekLock_Complete_RemovesMessage(Transport transport)
     {
-        var (client, queue) = await Setup(transport);
+        var ct = TestContext.Current.CancellationToken;
+        var (client, queue) = await Setup(transport, ct);
 
         await using var sender = client.CreateSender(queue);
-        await sender.SendMessageAsync(new ServiceBusMessage("complete-me"));
+        await sender.SendMessageAsync(new ServiceBusMessage("complete-me"), ct);
 
         await using var receiver = client.CreateReceiver(queue);
-        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
         Assert.NotNull(msg);
         Assert.Equal("complete-me", msg!.Body.ToString());
-        await receiver.CompleteMessageAsync(msg);
+        await receiver.CompleteMessageAsync(msg, ct);
 
-        var second = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2));
+        var second = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2), ct);
         Assert.Null(second);
     }
 
@@ -49,41 +51,43 @@ public sealed class QueueingTests
     [MemberData(nameof(Transports))]
     public async Task PeekLock_Abandon_Redelivers(Transport transport)
     {
-        var (client, queue) = await Setup(transport);
+        var ct = TestContext.Current.CancellationToken;
+        var (client, queue) = await Setup(transport, ct);
 
         await using var sender = client.CreateSender(queue);
-        await sender.SendMessageAsync(new ServiceBusMessage("abandon-me"));
+        await sender.SendMessageAsync(new ServiceBusMessage("abandon-me"), ct);
 
         await using var receiver = client.CreateReceiver(queue);
-        var first = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+        var first = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
         Assert.NotNull(first);
-        await receiver.AbandonMessageAsync(first!);
+        await receiver.AbandonMessageAsync(first!, cancellationToken: ct);
 
-        var second = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+        var second = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
         Assert.NotNull(second);
         Assert.Equal("abandon-me", second!.Body.ToString());
-        await receiver.CompleteMessageAsync(second);
+        await receiver.CompleteMessageAsync(second, ct);
     }
 
     [Theory]
     [MemberData(nameof(Transports))]
     public async Task PeekLock_DeadLetter_RemovesFromMainQueue(Transport transport)
     {
-        var (client, queue) = await Setup(transport);
+        var ct = TestContext.Current.CancellationToken;
+        var (client, queue) = await Setup(transport, ct);
 
         await using var sender = client.CreateSender(queue);
-        await sender.SendMessageAsync(new ServiceBusMessage("dead-letter-me"));
+        await sender.SendMessageAsync(new ServiceBusMessage("dead-letter-me"), ct);
 
         await using var receiver = client.CreateReceiver(queue);
-        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
         Assert.NotNull(msg);
-        await receiver.DeadLetterMessageAsync(msg!);
+        await receiver.DeadLetterMessageAsync(msg!, cancellationToken: ct);
 
-        var second = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2));
+        var second = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2), ct);
         Assert.Null(second);
     }
 
-    private static async Task<(ServiceBusClient Client, string Queue)> Setup(Transport transport)
+    private static async Task<(ServiceBusClient Client, string Queue)> Setup(Transport transport, CancellationToken ct)
     {
         switch (transport)
         {
@@ -96,7 +100,7 @@ public sealed class QueueingTests
                 Assert.SkipWhen(string.IsNullOrWhiteSpace(conn), "ServiceBus:ConnectionString not set; run `task sb:up` and put the connection string in tests/asbe.Tests/appsettings.test.json (see appsettings.test.example.json).");
                 var queue = TestConfig.Value["ServiceBus:Queue"] ?? "test-queue";
                 var client = new ServiceBusClient(conn!);
-                await Drain(client, queue);
+                await Drain(client, queue, ct);
                 return (client, queue);
 
             default:
@@ -104,13 +108,13 @@ public sealed class QueueingTests
         }
     }
 
-    private static async Task Drain(ServiceBusClient client, string queue)
+    private static async Task Drain(ServiceBusClient client, string queue, CancellationToken ct)
     {
         await using var receiver = client.CreateReceiver(queue, new ServiceBusReceiverOptions
         {
             ReceiveMode = ServiceBusReceiveMode.ReceiveAndDelete,
         });
-        while (await receiver.ReceiveMessageAsync(TimeSpan.FromMilliseconds(200)) is not null) { }
+        while (await receiver.ReceiveMessageAsync(TimeSpan.FromMilliseconds(200), ct) is not null) { }
     }
 }
 

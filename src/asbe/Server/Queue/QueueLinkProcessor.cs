@@ -2,7 +2,7 @@ using Amqp;
 using Amqp.Framing;
 using Amqp.Listener;
 
-sealed class QueueLinkProcessor : ILinkProcessor
+sealed class QueueLinkProcessor(QueueStore queues) : ILinkProcessor
 {
     private const uint MaxMessageSize = 256 * 1024;
 
@@ -22,7 +22,7 @@ sealed class QueueLinkProcessor : ILinkProcessor
         }
 
         attach.MaxMessageSize = MaxMessageSize;
-        var queue = QueueStore.Get(address);
+        var queue = queues.Get(address);
 
         if (!attach.Role)
         {
@@ -32,18 +32,5 @@ sealed class QueueLinkProcessor : ILinkProcessor
         {
             attachContext.Complete(new DrainAwareSourceLinkEndpoint(new QueueMessageSource(queue), attachContext.Link), 0);
         }
-    }
-}
-
-sealed class DrainAwareSourceLinkEndpoint(IMessageSource source, ListenerLink link) : SourceLinkEndpoint(source, link)
-{
-    public override void OnFlow(FlowContext flowContext)
-    {
-        if (flowContext.Link.IsDraining)
-        {
-            flowContext.Link.CompleteDrain();
-            return;
-        }
-        base.OnFlow(flowContext);
     }
 }
