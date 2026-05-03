@@ -30,7 +30,20 @@ sealed class QueueLinkProcessor : ILinkProcessor
         }
         else
         {
-            attachContext.Complete(new SourceLinkEndpoint(new QueueMessageSource(queue), attachContext.Link), 0);
+            attachContext.Complete(new DrainAwareSourceLinkEndpoint(new QueueMessageSource(queue), attachContext.Link), 0);
         }
+    }
+}
+
+sealed class DrainAwareSourceLinkEndpoint(IMessageSource source, ListenerLink link) : SourceLinkEndpoint(source, link)
+{
+    public override void OnFlow(FlowContext flowContext)
+    {
+        if (flowContext.Link.IsDraining)
+        {
+            flowContext.Link.CompleteDrain();
+            return;
+        }
+        base.OnFlow(flowContext);
     }
 }

@@ -5,6 +5,7 @@ sealed class InMemoryQueue
 {
     private readonly ConcurrentQueue<Message> _messages = new();
     private readonly ConcurrentQueue<TaskCompletionSource<Message>> _waiters = new();
+    private readonly ConcurrentQueue<Message> _deadLetter = new();
 
     public void Enqueue(Message message)
     {
@@ -22,4 +23,6 @@ sealed class InMemoryQueue
         _waiters.Enqueue(tcs);
         return tcs.Task;
     }
+
+    public void DeadLetter(Message message) => _deadLetter.Enqueue(message);
 }

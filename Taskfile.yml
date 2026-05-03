@@ -1,5 +1,13 @@
 version: '3'
 
+vars:
+  PROJECT: src/asbe/asbe.csproj
+  TEST_PROJECT: tests/asbe.Tests/asbe.Tests.csproj
+  SB_RG: asbe-testing-rg
+  SB_NAMESPACE: asbe-testing
+  SB_QUEUE: test-queue
+  SB_LOCATION: uksouth
+
 tasks:
   default:
     cmds:
@@ -7,11 +15,34 @@ tasks:
     silent: true
 
   build:
-    desc: Build the project
+    desc: Build the solution
     cmds:
-      - dotnet build
+      - dotnet build asbe.slnx
 
   run:
-    desc: Run the project
+    desc: Run the asbe app
     cmds:
-      - dotnet run
+      - dotnet run --project {{.PROJECT}}
+
+  test:
+    desc: Run tests (provide tests/asbe.Tests/appsettings.test.json to also exercise the Azure transport)
+    cmds:
+      - dotnet run --project {{.TEST_PROJECT}}
+
+  sb:up:
+    desc: Create Azure Service Bus (Basic) namespace + queue in the current subscription
+    cmds:
+      - az group create -n {{.SB_RG}} -l {{.SB_LOCATION}} -o none
+      - az servicebus namespace create -g {{.SB_RG}} -n {{.SB_NAMESPACE}} --sku Basic -l {{.SB_LOCATION}} -o none
+      - az servicebus queue create -g {{.SB_RG}} --namespace-name {{.SB_NAMESPACE}} -n {{.SB_QUEUE}} -o none
+      - |
+        echo "Connection string (export as SERVICEBUS_CONNECTION_STRING to enable Azure tests):"
+        az servicebus namespace authorization-rule keys list \
+          -g {{.SB_RG}} --namespace-name {{.SB_NAMESPACE}} \
+          -n RootManageSharedAccessKey \
+          --query primaryConnectionString -o tsv
+
+  sb:down:
+    desc: Delete the Azure Service Bus resource group (and everything in it)
+    cmds:
+      - az group delete -n {{.SB_RG}} -y --no-wait

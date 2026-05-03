@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="asbe.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="AMQPNetLite.Core" Version="2.5.2" />
     <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.1" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.7" />
