@@ -6,6 +6,8 @@ using Amqp.Types;
 
 sealed class AmqpServer
 {
+    public const string LocalConnectionString = "Endpoint=sb://localhost;SharedAccessKeyName=dev;SharedAccessKey=dev;UseDevelopmentEmulator=true;";
+
     private readonly ContainerHost _host;
     private const string _connString = "amqp://127.0.0.1:5672";
 

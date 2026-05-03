@@ -14,11 +14,16 @@ public sealed class QueueingTests
     {
         var (client, queue) = await Setup(transport);
 
-        await client.Send(queue, new ServiceBusMessage("Hello world"));
+        await using var sender = client.CreateSender(queue);
+        await sender.SendMessageAsync(new ServiceBusMessage("Hello world"));
 
-        var body = await client.Receive(queue, TimeSpan.FromSeconds(10));
+        await using var receiver = client.CreateReceiver(queue, new ServiceBusReceiverOptions
+        {
+            ReceiveMode = ServiceBusReceiveMode.ReceiveAndDelete,
+        });
+        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
 
-        Assert.Equal("Hello world", body);
+        Assert.Equal("Hello world", msg?.Body.ToString());
     }
 
     [Theory]
@@ -27,7 +32,8 @@ public sealed class QueueingTests
     {
         var (client, queue) = await Setup(transport);
 
-        await client.Send(queue, new ServiceBusMessage("complete-me"));
+        await using var sender = client.CreateSender(queue);
+        await sender.SendMessageAsync(new ServiceBusMessage("complete-me"));
 
         await using var receiver = client.CreateReceiver(queue);
         var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
@@ -45,7 +51,8 @@ public sealed class QueueingTests
     {
         var (client, queue) = await Setup(transport);
 
-        await client.Send(queue, new ServiceBusMessage("abandon-me"));
+        await using var sender = client.CreateSender(queue);
+        await sender.SendMessageAsync(new ServiceBusMessage("abandon-me"));
 
         await using var receiver = client.CreateReceiver(queue);
         var first = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
@@ -64,7 +71,8 @@ public sealed class QueueingTests
     {
         var (client, queue) = await Setup(transport);
 
-        await client.Send(queue, new ServiceBusMessage("dead-letter-me"));
+        await using var sender = client.CreateSender(queue);
+        await sender.SendMessageAsync(new ServiceBusMessage("dead-letter-me"));
 
         await using var receiver = client.CreateReceiver(queue);
         var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
@@ -75,25 +83,34 @@ public sealed class QueueingTests
         Assert.Null(second);
     }
 
-    private static async Task<(AmqpClient Client, string Queue)> Setup(Transport transport)
+    private static async Task<(ServiceBusClient Client, string Queue)> Setup(Transport transport)
     {
         switch (transport)
         {
             case Transport.Local:
                 LocalServer.EnsureStarted();
-                return (new AmqpClient(AmqpClient.LocalConnectionString), $"test-queue-{Guid.NewGuid():N}");
+                return (new ServiceBusClient(AmqpServer.LocalConnectionString), $"test-queue-{Guid.NewGuid():N}");
 
             case Transport.Azure:
                 var conn = TestConfig.Value["ServiceBus:ConnectionString"];
                 Assert.SkipWhen(string.IsNullOrWhiteSpace(conn), "ServiceBus:ConnectionString not set; run `task sb:up` and put the connection string in tests/asbe.Tests/appsettings.test.json (see appsettings.test.example.json).");
                 var queue = TestConfig.Value["ServiceBus:Queue"] ?? "test-queue";
-                var client = new AmqpClient(conn!);
-                await client.Drain(queue);
+                var client = new ServiceBusClient(conn!);
+                await Drain(client, queue);
                 return (client, queue);
 
             default:
                 throw new ArgumentOutOfRangeException(nameof(transport));
         }
+    }
+
+    private static async Task Drain(ServiceBusClient client, string queue)
+    {
+        await using var receiver = client.CreateReceiver(queue, new ServiceBusReceiverOptions
+        {
+            ReceiveMode = ServiceBusReceiveMode.ReceiveAndDelete,
+        });
+        while (await receiver.ReceiveMessageAsync(TimeSpan.FromMilliseconds(200)) is not null) { }
     }
 }
 
