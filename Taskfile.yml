@@ -1,0 +1,17 @@
+version: '3'
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  build:
+    desc: Build the project
+    cmds:
+      - dotnet build
+
+  run:
+    desc: Run the project
+    cmds:
+      - dotnet run
