@@ -6,7 +6,7 @@
 - Send to a queue. The broker advertises `MaxMessageSize` on attach so the SDK's batch APIs work.
 - Receive from a queue. Backed by an in-memory store with async-blocking dequeue (TCS waiters, no spin).
 - Multiple queues. Any address auto-creates an `InMemoryQueue` via `QueueStore`.
-- PeekLock receive with `CompleteMessageAsync` / `AbandonMessageAsync` / `DeadLetterMessageAsync`. Lock tokens are 16-byte GUID delivery tags injected via an `IHandler` on `EventId.SendDelivery` (AMQPNetLite's default tag is 4 bytes, which the Service Bus SDK rejects). Drain on receiver close is acked via `ListenerLink.CompleteDrain`.
+- PeekLock receive with `CompleteMessageAsync` / `AbandonMessageAsync` / `DeadLetterMessageAsync`.
 
 ## Known limitations
 
