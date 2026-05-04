@@ -16,6 +16,9 @@ sealed class ManagementRequestProcessor(InMemoryQueue queue, ILogger<ManagementR
     private const string PeekMessageOperation = "com.microsoft:peek-message";
     private const string ScheduleMessageOperation = "com.microsoft:schedule-message";
     private const string CancelScheduledMessageOperation = "com.microsoft:cancel-scheduled-message";
+    private const string RenewSessionLockOperation = "com.microsoft:renew-session-lock";
+    private const string GetSessionStateOperation = "com.microsoft:get-session-state";
+    private const string SetSessionStateOperation = "com.microsoft:set-session-state";
 
     public int Credit => 100;
 
@@ -33,6 +36,9 @@ sealed class ManagementRequestProcessor(InMemoryQueue queue, ILogger<ManagementR
                 PeekMessageOperation => Peek(requestContext.Message),
                 ScheduleMessageOperation => Schedule(requestContext.Message),
                 CancelScheduledMessageOperation => CancelScheduled(requestContext.Message),
+                RenewSessionLockOperation => RenewSessionLock(requestContext.Message),
+                GetSessionStateOperation => GetSessionState(requestContext.Message),
+                SetSessionStateOperation => SetSessionState(requestContext.Message),
                 _ => Status(501, $"Operation '{op}' is not supported."),
             };
         }
@@ -128,6 +134,40 @@ sealed class ManagementRequestProcessor(InMemoryQueue queue, ILogger<ManagementR
         {
             if (tokens.GetValue(i) is long seq) queue.CancelScheduled(seq);
         }
+        return Status(200, "OK");
+    }
+
+    private Message RenewSessionLock(Message request)
+    {
+        if (request.Body is not Map body) return Status(400, "Missing body.");
+        if (body["session-id"] is not string sessionId) return Status(400, "Missing session-id.");
+        var session = queue.Sessions.Find(sessionId);
+        if (session is null || !session.TryRenewLock(out var expiresAt))
+            return Status(410, $"Session '{sessionId}' lock is not held.");
+        return Ok(new Map { ["expiration"] = expiresAt });
+    }
+
+    private Message GetSessionState(Message request)
+    {
+        if (request.Body is not Map body) return Status(400, "Missing body.");
+        if (body["session-id"] is not string sessionId) return Status(400, "Missing session-id.");
+        var session = queue.Sessions.Find(sessionId);
+        var state = session?.State ?? [];
+        return Ok(new Map { ["session-state"] = state.Length > 0 ? state : null });
+    }
+
+    private Message SetSessionState(Message request)
+    {
+        if (request.Body is not Map body) return Status(400, "Missing body.");
+        if (body["session-id"] is not string sessionId) return Status(400, "Missing session-id.");
+        var session = queue.Sessions.GetOrCreate(sessionId);
+        session.State = body["session-state"] switch
+        {
+            null => [],
+            byte[] b => b,
+            ArraySegment<byte> seg => seg.ToArray(),
+            _ => session.State,
+        };
         return Status(200, "OK");
     }
 

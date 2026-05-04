@@ -11,6 +11,8 @@ internal static class TestData
 
     public static readonly QueueOptions DefaultOptions = QueueOptions.Default;
     public static readonly QueueOptions FastOptions = new(TimeSpan.FromSeconds(5), 3);
+    public static readonly QueueOptions SessionOptions = QueueOptions.Default with { RequiresSession = true };
+    public static readonly QueueOptions FastSessionOptions = new(TimeSpan.FromSeconds(5), 3, RequiresSession: true);
 }
 
 internal sealed class TestQueue : IAsyncDisposable
@@ -38,11 +40,21 @@ internal sealed class TestQueue : IAsyncDisposable
                 var conn = TestConfig.Value["ServiceBus:ConnectionString"];
                 Assert.SkipWhen(string.IsNullOrWhiteSpace(conn), "ServiceBus:ConnectionString not set; run `task sb:up` and put the connection string in tests/asbe.Tests/appsettings.test.json (see appsettings.test.example.json).");
                 var admin = new ServiceBusAdministrationClient(conn);
-                await admin.CreateQueueAsync(new CreateQueueOptions(name)
+                try
                 {
-                    LockDuration = options.LockDuration,
-                    MaxDeliveryCount = options.MaxDeliveryCount,
-                }, ct);
+                    await admin.CreateQueueAsync(new CreateQueueOptions(name)
+                    {
+                        LockDuration = options.LockDuration,
+                        MaxDeliveryCount = options.MaxDeliveryCount,
+                        RequiresSession = options.RequiresSession,
+                    }, ct);
+                }
+                catch (Exception ex) when (options.RequiresSession && ex.Message.Contains("RequiresSession", StringComparison.Ordinal))
+                {
+                    // Sessions require Standard+ tier; the default `task sb:up` provisions Basic.
+                    // Skip Azure parity for session tests until the namespace is upgraded.
+                    Assert.Skip($"Azure namespace does not support sessions (likely Basic SKU). Upgrade the namespace to Standard to run session parity tests.");
+                }
                 return new TestQueue
                 {
                     Client = new ServiceBusClient(conn!),

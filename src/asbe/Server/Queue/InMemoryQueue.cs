@@ -7,10 +7,16 @@ using Microsoft.Extensions.Logging.Abstractions;
 sealed class InMemoryQueue : IQueueEndpoint
 {
     private static readonly Symbol ScheduledEnqueueTimeAnnotation = "x-opt-scheduled-enqueue-time";
+    // Service Bus encodes a message's session-id on the AMQP Properties.GroupId field
+    // (matches the standard AMQP message-grouping convention) — *not* on the
+    // x-opt-session-id annotation. The annotation only appears on receive paths in some
+    // legacy contexts; the SDK reads/writes SessionId via GroupId.
+    public static string? ReadSessionId(Message message) => message.Properties?.GroupId;
 
     public QueueOptions Options { get; }
     public MessageBuffer Primary { get; }
     public IQueueEndpoint DeadLetter => _deadLetterReceiver;
+    public SessionStore Sessions { get; }
 
     private readonly MessageBuffer _deadLetter;
     private readonly DeadLetterReceiver _deadLetterReceiver;
@@ -26,6 +32,7 @@ sealed class InMemoryQueue : IQueueEndpoint
         _deadLetter = new MessageBuffer(options.LockDuration, OnDeadLetterLockExpired, loggerFactory.CreateLogger<MessageBuffer>());
         _deadLetterReceiver = new DeadLetterReceiver(_deadLetter);
         _scheduled = new ScheduledStore(Primary, loggerFactory.CreateLogger<ScheduledStore>());
+        Sessions = new SessionStore(options.LockDuration, Primary, OnPrimaryLockExpired, loggerFactory);
     }
 
     public long Schedule(Message message)
@@ -38,7 +45,14 @@ sealed class InMemoryQueue : IQueueEndpoint
 
     public bool CancelScheduled(long sequenceNumber) => _scheduled.Cancel(sequenceNumber);
 
-    public void Enqueue(Message message) => Primary.Enqueue(message);
+    public void Enqueue(Message message)
+    {
+        var sessionId = ReadSessionId(message);
+        if (!string.IsNullOrEmpty(sessionId))
+            Sessions.Enqueue(sessionId, message);
+        else
+            Primary.Enqueue(message);
+    }
 
     public Task<Delivery> DequeueAsync(CancellationToken cancellation) => Primary.DequeueAsync(cancellation);
 
@@ -52,32 +66,46 @@ sealed class InMemoryQueue : IQueueEndpoint
 
     public void Abandon(long deliveryId)
     {
-        if (Primary.TryRelease(deliveryId, out var delivery)) Reroute(delivery);
+        if (Primary.TryRelease(deliveryId, out var delivery)) Reroute(Primary, delivery);
     }
 
     public void Reject(long deliveryId, DeadLetterInfo info)
     {
-        if (Primary.TryRelease(deliveryId, out var delivery)) MoveToDeadLetter(delivery, info);
+        if (Primary.TryRelease(deliveryId, out var delivery)) MoveToDeadLetter(Primary, delivery, info);
     }
 
-    public bool TryRenewLock(Guid lockToken, out DateTime expiresAt) =>
-        Primary.TryRenewLock(lockToken, out expiresAt);
+    public bool TryRenewLock(Guid lockToken, out DateTime expiresAt)
+    {
+        if (Primary.TryRenewLock(lockToken, out expiresAt)) return true;
+        return Sessions.TryRenewMessageLock(lockToken, out expiresAt);
+    }
 
-    private void OnPrimaryLockExpired(Delivery delivery) => Reroute(delivery);
+    private void OnPrimaryLockExpired(Delivery delivery)
+    {
+        // Lock-expired delivery comes from either the primary buffer or a session sub-buffer;
+        // both share the reroute/dead-letter path on the owning buffer.
+        var sessionId = ReadSessionId(delivery.Message);
+        var buffer = !string.IsNullOrEmpty(sessionId) ? Sessions.GetOrCreate(sessionId).Buffer : Primary;
+        Reroute(buffer, delivery);
+    }
 
     private void OnDeadLetterLockExpired(Delivery delivery) => _deadLetter.Requeue(delivery);
 
-    private void Reroute(Delivery delivery)
+    internal void RerouteSessionDelivery(Session session, Delivery delivery) => Reroute(session.Buffer, delivery);
+
+    internal void DeadLetterFromSession(Session session, Delivery delivery, DeadLetterInfo info) => MoveToDeadLetter(session.Buffer, delivery, info);
+
+    private void Reroute(MessageBuffer source, Delivery delivery)
     {
         if (delivery.DeliveryCount >= Options.MaxDeliveryCount)
-            MoveToDeadLetter(delivery, DeadLetterInfo.MaxDeliveryCountExceeded);
+            MoveToDeadLetter(source, delivery, DeadLetterInfo.MaxDeliveryCountExceeded);
         else
-            Primary.Requeue(delivery);
+            source.Requeue(delivery);
     }
 
-    private void MoveToDeadLetter(Delivery delivery, DeadLetterInfo info)
+    private void MoveToDeadLetter(MessageBuffer source, Delivery delivery, DeadLetterInfo info)
     {
-        Primary.Drop(delivery.SequenceNumber);
+        source.Drop(delivery.SequenceNumber);
         var message = delivery.Message;
         message.ApplicationProperties ??= new ApplicationProperties();
         message.ApplicationProperties.Map["DeadLetterReason"] = info.Reason;
@@ -113,4 +141,38 @@ sealed class DeadLetterReceiver(MessageBuffer buffer) : IQueueEndpoint
         if (buffer.TryRelease(deliveryId, out var delivery)) buffer.Drop(delivery.SequenceNumber);
     }
     public bool TryRenewLock(Guid lockToken, out DateTime expiresAt) => buffer.TryRenewLock(lockToken, out expiresAt);
+}
+
+// Wraps a Session for receivers that attached with a session filter. Only this endpoint
+// can dequeue from the session; the parent queue's primary path stays untouched. The
+// session lock is released when the receiver detaches (see QueueLinkProcessor).
+sealed class SessionEndpoint(InMemoryQueue queue, Session session) : IQueueEndpoint
+{
+    public Session Session => session;
+
+    public void Enqueue(Message message) => queue.Enqueue(message);
+    public Task<Delivery> DequeueAsync(CancellationToken cancellation) => session.Buffer.DequeueAsync(cancellation);
+    public IReadOnlyList<Message> Peek(long fromSequenceNumber, int maxCount) =>
+        session.Buffer.Peek(fromSequenceNumber, maxCount);
+
+    public void Complete(long deliveryId)
+    {
+        if (session.Buffer.TryRelease(deliveryId, out var delivery))
+            session.Buffer.Drop(delivery.SequenceNumber);
+    }
+
+    public void Abandon(long deliveryId)
+    {
+        if (session.Buffer.TryRelease(deliveryId, out var delivery))
+            queue.RerouteSessionDelivery(session, delivery);
+    }
+
+    public void Reject(long deliveryId, DeadLetterInfo info)
+    {
+        if (session.Buffer.TryRelease(deliveryId, out var delivery))
+            queue.DeadLetterFromSession(session, delivery, info);
+    }
+
+    public bool TryRenewLock(Guid lockToken, out DateTime expiresAt) =>
+        session.Buffer.TryRenewLock(lockToken, out expiresAt);
 }

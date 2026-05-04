@@ -47,6 +47,11 @@ sealed class MessageBuffer
         lock (_trackedLock) _tracked.Remove(sequenceNumber);
     }
 
+    public bool HasPending
+    {
+        get { lock (_trackedLock) return _tracked.Count > 0; }
+    }
+
     public IReadOnlyList<Message> Peek(long fromSequenceNumber, int maxCount)
     {
         if (maxCount <= 0) return [];
