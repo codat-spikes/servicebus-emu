@@ -1,11 +1,12 @@
 using Amqp;
 using Amqp.Framing;
 using Amqp.Listener;
+using Amqp.Transactions;
 using Amqp.Types;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-sealed class QueueMessageSource(IQueueEndpoint endpoint, ILogger<QueueMessageSource>? logger = null) : IMessageSource
+sealed class QueueMessageSource(IQueueEndpoint endpoint, TxnManager txnManager, ILogger<QueueMessageSource>? logger = null) : IMessageSource
 {
     private static readonly Symbol DeadLetterReasonKey = "DeadLetterReason";
     private static readonly Symbol DeadLetterErrorDescriptionKey = "DeadLetterErrorDescription";
@@ -29,32 +30,26 @@ sealed class QueueMessageSource(IQueueEndpoint endpoint, ILogger<QueueMessageSou
         var delivery = (Delivery)receiveContext.UserToken;
         try
         {
-            switch (dispositionContext.DeliveryState)
+            // Transactional disposition: stage the outcome against the txn instead of
+            // applying it now. The lock stays held; on commit we apply the wrapped
+            // outcome, on rollback we drop the closure (lock stays held until expiry,
+            // matching Service Bus's at-least-once contract for in-flight txns).
+            if (dispositionContext.DeliveryState is TransactionalState txnState)
             {
-                case Accepted:
-                    _logger.LogTrace("Accept delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
-                    endpoint.Complete(delivery.Id);
-                    break;
-                case Released:
-                    // AMQP `released` is implicit (e.g. AMQPNetLite emits it for unsettled
-                    // messages when the link closes). The Service Bus SDK uses `modified`
-                    // for AbandonMessageAsync, never `released` — so the broker holds the
-                    // lock until expiry rather than requeuing immediately. Match that.
-                    _logger.LogTrace("Released (lock held until expiry) delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
-                    break;
-                case Modified modified when modified.UndeliverableHere:
-                    _logger.LogTrace("Modified-undeliverable delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
-                    endpoint.Reject(delivery.Id, DeadLetterInfo.DeadLetteredByReceiver);
-                    break;
-                case Modified:
-                    _logger.LogTrace("Modified (abandon) delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
-                    endpoint.Abandon(delivery.Id);
-                    break;
-                case Rejected rejected:
-                    _logger.LogTrace("Reject delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
-                    endpoint.Reject(delivery.Id, ReadDeadLetterInfo(rejected));
-                    break;
+                var inner = txnState.Outcome;
+                var txn = txnManager.GetTransaction(txnState.TxnId);
+                txn.AddOperation(fail =>
+                {
+                    if (fail) return;
+                    ApplyOutcome(delivery, inner);
+                });
+                _logger.LogTrace("Dispose staged delivery={DeliveryId} seq={SequenceNumber} txn={Txn}",
+                    delivery.Id, delivery.SequenceNumber, BitConverter.ToInt32(txnState.TxnId, 0));
+                dispositionContext.Complete();
+                return;
             }
+
+            ApplyOutcome(delivery, dispositionContext.DeliveryState);
         }
         catch (Exception ex)
         {
@@ -63,6 +58,36 @@ sealed class QueueMessageSource(IQueueEndpoint endpoint, ILogger<QueueMessageSou
             throw;
         }
         dispositionContext.Complete();
+    }
+
+    private void ApplyOutcome(Delivery delivery, Amqp.Framing.DeliveryState? state)
+    {
+        switch (state)
+        {
+            case Accepted:
+                _logger.LogTrace("Accept delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
+                endpoint.Complete(delivery.Id);
+                break;
+            case Released:
+                // AMQP `released` is implicit (e.g. AMQPNetLite emits it for unsettled
+                // messages when the link closes). The Service Bus SDK uses `modified`
+                // for AbandonMessageAsync, never `released` — so the broker holds the
+                // lock until expiry rather than requeuing immediately. Match that.
+                _logger.LogTrace("Released (lock held until expiry) delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
+                break;
+            case Modified modified when modified.UndeliverableHere:
+                _logger.LogTrace("Modified-undeliverable delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
+                endpoint.Reject(delivery.Id, DeadLetterInfo.DeadLetteredByReceiver);
+                break;
+            case Modified:
+                _logger.LogTrace("Modified (abandon) delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
+                endpoint.Abandon(delivery.Id);
+                break;
+            case Rejected rejected:
+                _logger.LogTrace("Reject delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
+                endpoint.Reject(delivery.Id, ReadDeadLetterInfo(rejected));
+                break;
+        }
     }
 
     private static DeadLetterInfo ReadDeadLetterInfo(Rejected rejected)

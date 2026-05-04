@@ -1,5 +1,6 @@
 using Amqp.Listener;
 using Amqp.Sasl;
+using Amqp.Transactions;
 using Amqp.Types;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -10,6 +11,7 @@ sealed class AmqpServer
     private const string ListenerAddress = "amqp://127.0.0.1:5672";
 
     private readonly QueueStore _queues;
+    private readonly TxnManager _txnManager;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<AmqpServer> _logger;
     private readonly ContainerHost _host = new([ListenerAddress]);
@@ -23,6 +25,7 @@ sealed class AmqpServer
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
         _logger = _loggerFactory.CreateLogger<AmqpServer>();
         _queues = new QueueStore(queues, RegisterManagement, _loggerFactory);
+        _txnManager = new TxnManager(_loggerFactory);
     }
 
     public void CreateQueue(string name, QueueOptions options) => _queues.CreateQueue(name, options);
@@ -60,9 +63,18 @@ sealed class AmqpServer
         listener.SASL.EnableMechanism((Symbol)"MSSBCBS", SaslProfile.Anonymous);
         listener.HandlerFactory = _ => new LockTokenHandler();
 
+        // Coordinator-targeted attaches don't have a `Target.Address`, and ContainerHost's
+        // default attach path casts attach.Target to `Target` unconditionally before
+        // delegating to the link processor. Pre-resolve coordinator attaches to a
+        // sentinel address so the cast is skipped; no processor is registered there,
+        // so the flow falls through to QueueLinkProcessor where we recognise the
+        // Coordinator target.
+        _host.AddressResolver = (_, attach) =>
+            !attach.Role && attach.Target is Coordinator ? "$coordinator" : null!;
+
         _host.Open();
         _host.RegisterRequestProcessor("$cbs", new CbsRequestProcessor(_loggerFactory.CreateLogger<CbsRequestProcessor>()));
-        _host.RegisterLinkProcessor(new QueueLinkProcessor(_queues, _loggerFactory));
+        _host.RegisterLinkProcessor(new QueueLinkProcessor(_queues, _txnManager, _loggerFactory));
         _logger.LogInformation("AMQP server listening on {Address}", ListenerAddress);
     }
 

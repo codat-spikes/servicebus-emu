@@ -1,6 +1,7 @@
 using Amqp;
 using Amqp.Framing;
 using Amqp.Listener;
+using Amqp.Transactions;
 using Amqp.Types;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -20,12 +21,14 @@ sealed class QueueLinkProcessor : ILinkProcessor
     private static readonly TimeSpan DefaultNextSessionTimeout = TimeSpan.FromSeconds(60);
 
     private readonly QueueStore _queues;
+    private readonly TxnManager _txnManager;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<QueueLinkProcessor> _logger;
 
-    public QueueLinkProcessor(QueueStore queues, ILoggerFactory? loggerFactory = null)
+    public QueueLinkProcessor(QueueStore queues, TxnManager txnManager, ILoggerFactory? loggerFactory = null)
     {
         _queues = queues;
+        _txnManager = txnManager;
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
         _logger = _loggerFactory.CreateLogger<QueueLinkProcessor>();
     }
@@ -33,6 +36,20 @@ sealed class QueueLinkProcessor : ILinkProcessor
     public void Process(AttachContext attachContext)
     {
         var attach = attachContext.Attach;
+
+        // Transaction coordinator attach: client wants to declare/discharge txns.
+        // Hand it a sink over the shared TxnManager.
+        if (!attach.Role && attach.Target is Coordinator)
+        {
+            _logger.LogInformation("Attach link={Link} role=sender target=coordinator", attach.LinkName);
+            attach.MaxMessageSize = MaxMessageSize;
+            var scope = _txnManager.CreateScope();
+            var coordinatorSink = new CoordinatorMessageSink(scope, _loggerFactory.CreateLogger<CoordinatorMessageSink>());
+            attachContext.Link.AddClosedCallback((_, _) => scope.Rollback());
+            attachContext.Complete(new TargetLinkEndpoint(coordinatorSink, attachContext.Link), 100);
+            return;
+        }
+
         var address = attach.Role
             ? (attach.Source as Source)?.Address
             : (attach.Target as Target)?.Address;
@@ -65,7 +82,7 @@ sealed class QueueLinkProcessor : ILinkProcessor
                 attachContext.Complete(new Error(ErrorCode.NotAllowed) { Description = $"Cannot receive from topic '{topic.Name}'; attach to '{topic.Name}/Subscriptions/<name>' instead." });
                 return;
             }
-            attachContext.Complete(new TargetLinkEndpoint(new TopicMessageSink(topic, _loggerFactory.CreateLogger<TopicMessageSink>()), attachContext.Link), 100);
+            attachContext.Complete(new TargetLinkEndpoint(new TopicMessageSink(topic, _txnManager, _loggerFactory.CreateLogger<TopicMessageSink>()), attachContext.Link), 100);
             return;
         }
 
@@ -73,7 +90,7 @@ sealed class QueueLinkProcessor : ILinkProcessor
 
         if (!attach.Role)
         {
-            attachContext.Complete(new TargetLinkEndpoint(new QueueMessageSink(endpoint, _loggerFactory.CreateLogger<QueueMessageSink>()), attachContext.Link), 100);
+            attachContext.Complete(new TargetLinkEndpoint(new QueueMessageSink(endpoint, _txnManager, _loggerFactory.CreateLogger<QueueMessageSink>()), attachContext.Link), 100);
             return;
         }
 
@@ -83,7 +100,7 @@ sealed class QueueLinkProcessor : ILinkProcessor
             return;
         }
 
-        attachContext.Complete(new DrainAwareSourceLinkEndpoint(new QueueMessageSource(endpoint, _loggerFactory.CreateLogger<QueueMessageSource>()), attachContext.Link), 0);
+        attachContext.Complete(new DrainAwareSourceLinkEndpoint(new QueueMessageSource(endpoint, _txnManager, _loggerFactory.CreateLogger<QueueMessageSource>()), attachContext.Link), 0);
     }
 
     private void AttachSessionReceiver(AttachContext attachContext, string address, IQueueEndpoint endpoint, string? requestedSessionId)
@@ -156,7 +173,7 @@ sealed class QueueLinkProcessor : ILinkProcessor
         attach.Properties[LockedUntilUtc] = lockedUntil.Ticks;
 
         var sessionEndpoint = new SessionEndpoint(queue, session);
-        var src = new QueueMessageSource(sessionEndpoint, _loggerFactory.CreateLogger<QueueMessageSource>());
+        var src = new QueueMessageSource(sessionEndpoint, _txnManager, _loggerFactory.CreateLogger<QueueMessageSource>());
         var listenerLink = attachContext.Link;
         listenerLink.AddClosedCallback((_, _) =>
         {

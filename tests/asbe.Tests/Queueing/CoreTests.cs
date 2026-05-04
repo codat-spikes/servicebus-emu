@@ -329,4 +329,80 @@ public sealed class CoreTests
         var second = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2), ct);
         Assert.Null(second);
     }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task Transaction_Commit_FlushesSends(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.DefaultOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        using (var tx = new System.Transactions.TransactionScope(System.Transactions.TransactionScopeAsyncFlowOption.Enabled))
+        {
+            await sender.SendMessageAsync(new ServiceBusMessage("tx-1"), ct);
+            await sender.SendMessageAsync(new ServiceBusMessage("tx-2"), ct);
+            tx.Complete();
+        }
+
+        await using var receiver = fx.Client.CreateReceiver(fx.Name, new ServiceBusReceiverOptions
+        {
+            ReceiveMode = ServiceBusReceiveMode.ReceiveAndDelete,
+        });
+        var first = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        var second = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.Equal(new[] { "tx-1", "tx-2" }, new[] { first!.Body.ToString(), second!.Body.ToString() });
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task Transaction_Rollback_DropsSends(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.DefaultOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        using (new System.Transactions.TransactionScope(System.Transactions.TransactionScopeAsyncFlowOption.Enabled))
+        {
+            await sender.SendMessageAsync(new ServiceBusMessage("rollback-me"), ct);
+            // Intentionally do not Complete -> txn rolls back on dispose.
+        }
+
+        await using var receiver = fx.Client.CreateReceiver(fx.Name, new ServiceBusReceiverOptions
+        {
+            ReceiveMode = ServiceBusReceiveMode.ReceiveAndDelete,
+        });
+        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2), ct);
+        Assert.Null(msg);
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task Transaction_Commit_AppliesComplete(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.DefaultOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessageAsync(new ServiceBusMessage("complete-in-tx"), ct);
+
+        await using var receiver = fx.Client.CreateReceiver(fx.Name);
+        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(msg);
+
+        using (var tx = new System.Transactions.TransactionScope(System.Transactions.TransactionScopeAsyncFlowOption.Enabled))
+        {
+            await receiver.CompleteMessageAsync(msg!, ct);
+            tx.Complete();
+        }
+
+        var second = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2), ct);
+        Assert.Null(second);
+    }
+
 }

@@ -181,4 +181,37 @@ public sealed class TimingTests
             $"redelivery happened in {sw.Elapsed.TotalSeconds:F1}s — broker shortcut the lock on receiver detach");
         await second.CompleteMessageAsync(redelivered, ct);
     }
+
+    [Theory(Timeout = 120_000)]
+    [Trait("Category", "Timing")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task Transaction_Rollback_LeavesLockHeldUntilExpiry(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.FastOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessageAsync(new ServiceBusMessage("rollback-complete"), ct);
+
+        await using var receiver = fx.Client.CreateReceiver(fx.Name);
+        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(msg);
+
+        using (new System.Transactions.TransactionScope(System.Transactions.TransactionScopeAsyncFlowOption.Enabled))
+        {
+            await receiver.CompleteMessageAsync(msg!, ct);
+            // No tx.Complete() -> rollback. Lock should remain held until expiry.
+        }
+
+        // Lock is still held by this receiver — nothing redelivers immediately.
+        var immediate = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(1), ct);
+        Assert.Null(immediate);
+
+        // After lock expiry (FastOptions = 5s), the message redelivers with bumped count.
+        var redelivered = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(15), ct);
+        Assert.NotNull(redelivered);
+        Assert.Equal("rollback-complete", redelivered!.Body.ToString());
+        Assert.Equal(2, redelivered.DeliveryCount);
+        await receiver.CompleteMessageAsync(redelivered, ct);
+    }
 }

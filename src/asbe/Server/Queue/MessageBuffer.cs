@@ -77,7 +77,7 @@ sealed class MessageBuffer
     public bool TryRelease(long deliveryId, out Delivery delivery)
     {
         if (!_inFlight.TryGetValue(deliveryId, out delivery!)) return false;
-        if (Interlocked.CompareExchange(ref delivery.State, (int)DeliveryState.Settled, (int)DeliveryState.Pending) != (int)DeliveryState.Pending)
+        if (Interlocked.CompareExchange(ref delivery.State, (int)BufferedDeliveryState.Settled, (int)BufferedDeliveryState.Pending) != (int)BufferedDeliveryState.Pending)
             return false;
         Forget(delivery);
         return true;
@@ -87,7 +87,7 @@ sealed class MessageBuffer
     {
         expiresAt = default;
         if (!_byLockToken.TryGetValue(lockToken, out var delivery)) return false;
-        if (Volatile.Read(ref delivery.State) != (int)DeliveryState.Pending) return false;
+        if (Volatile.Read(ref delivery.State) != (int)BufferedDeliveryState.Pending) return false;
         expiresAt = DateTime.UtcNow + LockDuration;
         delivery.LockedUntil = expiresAt;
         delivery.LockTimer.Change(LockDuration, Timeout.InfiniteTimeSpan);
@@ -127,7 +127,7 @@ sealed class MessageBuffer
     private void OnLockExpired(long deliveryId)
     {
         if (!_inFlight.TryGetValue(deliveryId, out var delivery)) return;
-        if (Interlocked.CompareExchange(ref delivery.State, (int)DeliveryState.Expired, (int)DeliveryState.Pending) != (int)DeliveryState.Pending)
+        if (Interlocked.CompareExchange(ref delivery.State, (int)BufferedDeliveryState.Expired, (int)BufferedDeliveryState.Pending) != (int)BufferedDeliveryState.Pending)
             return;
         Forget(delivery);
         _logger.LogTrace("Lock expired delivery={DeliveryId} seq={SequenceNumber} count={DeliveryCount}",
@@ -171,7 +171,7 @@ sealed class Delivery(long id, Message message, int deliveryCount, long sequence
     public int State;
 }
 
-enum DeliveryState
+enum BufferedDeliveryState
 {
     Pending = 0,
     Settled = 1,
