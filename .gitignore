@@ -1,3 +1,19 @@
-bin/**
-obj/**
+# .NET build artifacts
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.userprefs
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+
+# Rider / VS
+.idea/
+.vs/
+
+# Local config
 appsettings.test.json
