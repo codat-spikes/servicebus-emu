@@ -5,7 +5,9 @@ sealed record QueueOptions(
     TimeSpan? DefaultMessageTimeToLive = null,
     bool DeadLetteringOnMessageExpiration = false,
     bool RequiresDuplicateDetection = false,
-    TimeSpan? DuplicateDetectionHistoryTimeWindow = null)
+    TimeSpan? DuplicateDetectionHistoryTimeWindow = null,
+    string? ForwardTo = null,
+    string? ForwardDeadLetteredMessagesTo = null)
 {
     public static readonly QueueOptions Default = new(TimeSpan.FromSeconds(30), 10);
 }

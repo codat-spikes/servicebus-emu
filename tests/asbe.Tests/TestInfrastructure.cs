@@ -63,6 +63,10 @@ internal sealed class TestQueue : IAsyncDisposable
                         if (options.DuplicateDetectionHistoryTimeWindow is { } w)
                             createOpts.DuplicateDetectionHistoryTimeWindow = w;
                     }
+                    if (options.ForwardTo is { Length: > 0 } fwd)
+                        createOpts.ForwardTo = fwd;
+                    if (options.ForwardDeadLetteredMessagesTo is { Length: > 0 } fwdDlq)
+                        createOpts.ForwardDeadLetteredMessagesTo = fwdDlq;
                     await admin.CreateQueueAsync(createOpts, ct);
                 }
                 catch (Exception ex) when (options.RequiresSession && ex.Message.Contains("RequiresSession", StringComparison.Ordinal))

@@ -79,10 +79,18 @@ sealed class QueueStore : IDisposable
         return EndpointResolution.OfQueue(GetOrCreateQueue(trimmed));
     }
 
+    public Action<Message>? ResolveForward(string targetName)
+    {
+        var name = NormalizeName(targetName);
+        if (_queues.TryGetValue(name, out var q)) return q.Enqueue;
+        if (_topics.TryGetValue(name, out var t)) return t.Enqueue;
+        return null;
+    }
+
     public void CreateQueue(string name, QueueOptions options)
     {
         var key = NormalizeName(name);
-        var queue = new InMemoryQueue(options, _loggerFactory);
+        var queue = new InMemoryQueue(options, _loggerFactory, ResolveForward);
         if (!_queues.TryAdd(key, queue))
             throw new InvalidOperationException($"Queue '{name}' already exists.");
         _onQueueCreated(key, queue);
@@ -101,7 +109,7 @@ sealed class QueueStore : IDisposable
     public Topic CreateTopic(string name, TopicOptions options)
     {
         var key = NormalizeName(name);
-        var topic = new Topic(key, options, _loggerFactory);
+        var topic = new Topic(key, options, _loggerFactory, ResolveForward);
         if (!_topics.TryAdd(key, topic))
             throw new InvalidOperationException($"Topic '{name}' already exists.");
         _logger.LogInformation("Created topic '{Topic}' subscriptions={Count}", key, topic.Subscriptions.Count);
@@ -117,7 +125,7 @@ sealed class QueueStore : IDisposable
     private InMemoryQueue GetOrCreateQueue(string name)
     {
         if (_queues.TryGetValue(name, out var existing)) return existing;
-        var fresh = new InMemoryQueue(OptionsFor(name), _loggerFactory);
+        var fresh = new InMemoryQueue(OptionsFor(name), _loggerFactory, ResolveForward);
         var actual = _queues.GetOrAdd(name, fresh);
         if (ReferenceEquals(actual, fresh))
         {

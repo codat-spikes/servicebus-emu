@@ -25,7 +25,7 @@ sealed class Topic : IDisposable
     private readonly DuplicateDetectionWindow? _dedup;
     private long _nextSequenceNumber;
 
-    public Topic(string name, TopicOptions options, ILoggerFactory? loggerFactory = null)
+    public Topic(string name, TopicOptions options, ILoggerFactory? loggerFactory = null, Func<string, Action<Message>?>? forwardResolver = null)
     {
         loggerFactory ??= NullLoggerFactory.Instance;
         Name = name;
@@ -34,7 +34,7 @@ sealed class Topic : IDisposable
         _subscriptionRules = new Dictionary<string, SubscriptionRules>(options.Subscriptions.Count, StringComparer.Ordinal);
         foreach (var (subName, subOptions) in options.Subscriptions)
         {
-            _subscriptions[subName] = new InMemoryQueue(subOptions.Queue, loggerFactory);
+            _subscriptions[subName] = new InMemoryQueue(subOptions.Queue, loggerFactory, forwardResolver);
             _subscriptionRules[subName] = new SubscriptionRules(subOptions.Rules);
         }
         _scheduled = new ScheduledStore(AssignSequenceNumber, Enqueue, loggerFactory.CreateLogger<ScheduledStore>());

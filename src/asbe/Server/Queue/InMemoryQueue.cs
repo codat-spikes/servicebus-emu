@@ -23,14 +23,16 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
     private readonly ScheduledStore _scheduled;
     private readonly ExpiryStore _expiry;
     private readonly DuplicateDetectionWindow? _dedup;
+    private readonly Func<string, Action<Message>?>? _forwardResolver;
     // Per-sequence reverse index: where the message lives so the expiry callback can
     // find the right MessageBuffer (primary or a session sub-buffer) to evict from.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, MessageBuffer> _ownerBySeq = new();
     private readonly ILogger<InMemoryQueue> _logger;
 
-    public InMemoryQueue(QueueOptions options, ILoggerFactory? loggerFactory = null)
+    public InMemoryQueue(QueueOptions options, ILoggerFactory? loggerFactory = null, Func<string, Action<Message>?>? forwardResolver = null)
     {
         loggerFactory ??= NullLoggerFactory.Instance;
+        _forwardResolver = forwardResolver;
         _logger = loggerFactory.CreateLogger<InMemoryQueue>();
         Options = options;
         Primary = new MessageBuffer(options.LockDuration, OnPrimaryLockExpired, loggerFactory.CreateLogger<MessageBuffer>());
@@ -68,6 +70,12 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
                 _logger.LogTrace("Dropped duplicate enqueue messageId={MessageId}", id);
                 return;
             }
+        }
+
+        if (Options.ForwardTo is { Length: > 0 } forwardTo)
+        {
+            ForwardOrDeadLetter(message, forwardTo, "ForwardTo");
+            return;
         }
 
         var sessionId = ReadSessionId(message);
@@ -146,8 +154,35 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
         message.ApplicationProperties.Map["DeadLetterReason"] = "TTLExpiredException";
         message.Header = null;
         message.MessageAnnotations?.Map.Remove(MessageBuffer.SequenceNumberAnnotation);
-        _deadLetter.Enqueue(message);
+        EnqueueDeadLetter(message);
         _logger.LogInformation("TTL-expired seq={SequenceNumber} deliveryCount={DeliveryCount}", sequenceNumber, deliveryCount);
+    }
+
+    // Either forwards a dead-letter to ForwardDeadLetteredMessagesTo target or buffers
+    // it locally. Forward target lookup failures fall back to local DLQ — losing the
+    // message would be worse than missing the user-configured forward.
+    private void EnqueueDeadLetter(Message message)
+    {
+        if (Options.ForwardDeadLetteredMessagesTo is { Length: > 0 } target)
+        {
+            var resolved = _forwardResolver?.Invoke(target);
+            if (resolved is not null) { resolved(message); return; }
+            _logger.LogWarning("ForwardDeadLetteredMessagesTo target '{Target}' not found; buffering locally.", target);
+        }
+        _deadLetter.Enqueue(message);
+    }
+
+    private void ForwardOrDeadLetter(Message message, string target, string context)
+    {
+        var resolved = _forwardResolver?.Invoke(target);
+        if (resolved is not null) { resolved(message); return; }
+        _logger.LogWarning("{Context} target '{Target}' not found; routing to DLQ.", context, target);
+        message.ApplicationProperties ??= new ApplicationProperties();
+        message.ApplicationProperties.Map["DeadLetterReason"] = "ForwardingTargetNotFound";
+        message.ApplicationProperties.Map["DeadLetterErrorDescription"] = $"Forward target '{target}' does not exist.";
+        message.Header = null;
+        message.MessageAnnotations?.Map.Remove(MessageBuffer.SequenceNumberAnnotation);
+        _deadLetter.Enqueue(message);
     }
 
     public Task<Delivery> DequeueAsync(CancellationToken cancellation) => Primary.DequeueAsync(cancellation);
@@ -239,7 +274,7 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
         message.Header = null;
         // Force the DLQ buffer to assign its own sequence number.
         message.MessageAnnotations?.Map.Remove(MessageBuffer.SequenceNumberAnnotation);
-        _deadLetter.Enqueue(message);
+        EnqueueDeadLetter(message);
         _logger.LogInformation("Dead-lettered seq={SequenceNumber} reason={Reason} description={Description}",
             delivery.SequenceNumber, info.Reason, info.Description);
     }
