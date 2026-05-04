@@ -40,7 +40,28 @@ sealed class QueueLinkProcessor : ILinkProcessor
         }
 
         attach.MaxMessageSize = MaxMessageSize;
-        var endpoint = _queues.Get(address);
+        var resolution = _queues.Get(address);
+
+        if (resolution.Error is { } error)
+        {
+            _logger.LogWarning("Rejecting attach link={Link} address={Address}: {Description}", attach.LinkName, address, error.Description);
+            attachContext.Complete(error);
+            return;
+        }
+
+        if (resolution.Topic is { } topic)
+        {
+            if (attach.Role)
+            {
+                _logger.LogWarning("Rejecting receiver attach link={Link} on topic '{Topic}': must attach to a subscription", attach.LinkName, topic.Name);
+                attachContext.Complete(new Error(ErrorCode.NotAllowed) { Description = $"Cannot receive from topic '{topic.Name}'; attach to '{topic.Name}/Subscriptions/<name>' instead." });
+                return;
+            }
+            attachContext.Complete(new TargetLinkEndpoint(new TopicMessageSink(topic, _loggerFactory.CreateLogger<TopicMessageSink>()), attachContext.Link), 100);
+            return;
+        }
+
+        var endpoint = resolution.Queue!;
 
         if (!attach.Role)
         {

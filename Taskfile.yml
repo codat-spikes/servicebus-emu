@@ -47,17 +47,30 @@ tasks:
       - dotnet run --project {{.TEST_PROJECT}} -- --no-ansi --no-progress --filter-trait "Category=Edge" {{.CLI_ARGS}}
 
   sb:up:
-    desc: Create (idempotent) Azure Service Bus namespace + test queues, then print connection string
+    desc: Create (idempotent) Azure Service Bus namespace (Basic SKU) + test queues, then print connection string
     cmds:
       - task: sb:ns:up
       - task: sb:queues:up
       - task: sb:print-conn
 
+  sb:up:standard:
+    desc: Same as sb:up but Standard SKU — enables topic + session parity tests (~$10/mo base; tear down with sb:down when done)
+    cmds:
+      - task: sb:ns:up:standard
+      - task: sb:queues:up
+      - task: sb:print-conn
+
   sb:ns:up:
-    desc: Idempotently create the resource group + Service Bus namespace
+    desc: Idempotently create the resource group + Basic-SKU Service Bus namespace
     cmds:
       - az group create -n {{.SB_RG}} -l {{.SB_LOCATION}} -o none
       - az servicebus namespace create -g {{.SB_RG}} -n {{.SB_NAMESPACE}} --sku Basic -l {{.SB_LOCATION}} -o none
+
+  sb:ns:up:standard:
+    desc: Idempotently create the resource group + Standard-SKU Service Bus namespace
+    cmds:
+      - az group create -n {{.SB_RG}} -l {{.SB_LOCATION}} -o none
+      - az servicebus namespace create -g {{.SB_RG}} -n {{.SB_NAMESPACE}} --sku Standard -l {{.SB_LOCATION}} -o none
 
   sb:queues:up:
     desc: Idempotently create the test queues (matches the asbe appsettings.json config)

@@ -27,6 +27,20 @@ sealed class AmqpServer
 
     public void CreateQueue(string name, QueueOptions options) => _queues.CreateQueue(name, options);
 
+    public void CreateTopic(string name, TopicOptions options)
+    {
+        var topic = _queues.CreateTopic(name, options);
+        _host.RegisterRequestProcessor(_queues.TopicManagementAddressFor(name),
+            new TopicManagementRequestProcessor(topic, _loggerFactory.CreateLogger<TopicManagementRequestProcessor>()));
+        foreach (var (subName, subQueue) in topic.Subscriptions)
+        {
+            var address = _queues.SubscriptionManagementAddressFor(name, subName);
+            _host.RegisterRequestProcessor(address, new ManagementRequestProcessor(subQueue, _loggerFactory.CreateLogger<ManagementRequestProcessor>()));
+        }
+    }
+
+    public bool DeleteTopic(string name) => _queues.DeleteTopic(name);
+
     public bool DeleteQueue(string name)
     {
         // We deliberately don't call _host.UnregisterRequestProcessor here. AmqpNetLite's
@@ -53,5 +67,5 @@ sealed class AmqpServer
     }
 
     private void RegisterManagement(string name, InMemoryQueue queue) =>
-        _host.RegisterRequestProcessor(_queues.ManagementAddressFor(name), new ManagementRequestProcessor(queue, _loggerFactory.CreateLogger<ManagementRequestProcessor>()));
+        _host.RegisterRequestProcessor(_queues.QueueManagementAddressFor(name), new ManagementRequestProcessor(queue, _loggerFactory.CreateLogger<ManagementRequestProcessor>()));
 }

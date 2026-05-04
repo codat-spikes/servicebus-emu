@@ -74,6 +74,79 @@ internal sealed class TestQueue : IAsyncDisposable
     }
 }
 
+internal sealed class TestTopic : IAsyncDisposable
+{
+    public required ServiceBusClient Client { get; init; }
+    public required string TopicName { get; init; }
+    public required IReadOnlyList<string> SubscriptionNames { get; init; }
+    public required Func<ValueTask> Cleanup { private get; init; }
+
+    public string SubscriptionPath(string subscription) => $"{TopicName}/Subscriptions/{subscription}";
+
+    public static async Task<TestTopic> CreateAsync(Transport transport, IReadOnlyList<(string Name, QueueOptions Options)> subscriptions, CancellationToken ct)
+    {
+        var topicName = $"topic-{Guid.NewGuid():N}";
+        switch (transport)
+        {
+            case Transport.Local:
+                LocalServer.EnsureStarted();
+                LocalServer.Server.CreateTopic(topicName, new TopicOptions(
+                    subscriptions.ToDictionary(s => s.Name, s => s.Options, StringComparer.Ordinal)));
+                return new TestTopic
+                {
+                    Client = new ServiceBusClient(AmqpServer.LocalConnectionString),
+                    TopicName = topicName,
+                    SubscriptionNames = subscriptions.Select(s => s.Name).ToArray(),
+                    Cleanup = () => { LocalServer.Server.DeleteTopic(topicName); return ValueTask.CompletedTask; },
+                };
+
+            case Transport.Azure:
+                var conn = TestConfig.Value["ServiceBus:ConnectionString"];
+                Assert.SkipWhen(string.IsNullOrWhiteSpace(conn), "ServiceBus:ConnectionString not set; run `task sb:up` and put the connection string in tests/asbe.Tests/appsettings.test.json (see appsettings.test.example.json).");
+                var admin = new ServiceBusAdministrationClient(conn);
+                try
+                {
+                    await admin.CreateTopicAsync(new CreateTopicOptions(topicName), ct);
+                    foreach (var (name, options) in subscriptions)
+                    {
+                        await admin.CreateSubscriptionAsync(new CreateSubscriptionOptions(topicName, name)
+                        {
+                            LockDuration = options.LockDuration,
+                            MaxDeliveryCount = options.MaxDeliveryCount,
+                            RequiresSession = options.RequiresSession,
+                        }, ct);
+                    }
+                }
+                catch (Exception ex) when (ex.Message.Contains("'Basic' tier", StringComparison.Ordinal))
+                {
+                    // Topics require Standard tier; the default `task sb:up` provisions Basic.
+                    Assert.Skip("Azure namespace does not support topics (Basic SKU). Upgrade the namespace to Standard to run topic parity tests.");
+                }
+                catch (Exception ex) when (subscriptions.Any(s => s.Options.RequiresSession) && ex.Message.Contains("RequiresSession", StringComparison.Ordinal))
+                {
+                    await admin.DeleteTopicAsync(topicName, CancellationToken.None);
+                    Assert.Skip($"Azure namespace does not support sessions (likely Basic SKU). Upgrade the namespace to Standard to run session parity tests.");
+                }
+                return new TestTopic
+                {
+                    Client = new ServiceBusClient(conn!),
+                    TopicName = topicName,
+                    SubscriptionNames = subscriptions.Select(s => s.Name).ToArray(),
+                    Cleanup = async () => { await admin.DeleteTopicAsync(topicName, CancellationToken.None); },
+                };
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(transport));
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await Client.DisposeAsync();
+        await Cleanup();
+    }
+}
+
 internal static class TestConfig
 {
     public static readonly IConfiguration Value = new ConfigurationBuilder()

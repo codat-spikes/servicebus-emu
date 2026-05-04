@@ -8,23 +8,25 @@ using Microsoft.Extensions.Logging.Abstractions;
 // stamp it onto the message annotation so the active queue keeps it on flush.
 sealed class ScheduledStore
 {
-    private readonly MessageBuffer _primary;
+    private readonly Func<Message, long> _assignSequence;
+    private readonly Action<Message> _enqueue;
     private readonly ILogger<ScheduledStore> _logger;
     private readonly object _gate = new();
     private readonly Dictionary<long, ScheduledEntry> _bySeq = new();
     private readonly SortedDictionary<DateTime, List<long>> _byDue = new();
     private readonly Timer _timer;
 
-    public ScheduledStore(MessageBuffer primary, ILogger<ScheduledStore>? logger = null)
+    public ScheduledStore(Func<Message, long> assignSequence, Action<Message> enqueue, ILogger<ScheduledStore>? logger = null)
     {
-        _primary = primary;
+        _assignSequence = assignSequence;
+        _enqueue = enqueue;
         _logger = logger ?? NullLogger<ScheduledStore>.Instance;
         _timer = new Timer(_ => SafeFlush(), null, Timeout.Infinite, Timeout.Infinite);
     }
 
     public long Schedule(Message message, DateTime enqueueAtUtc)
     {
-        var seq = _primary.AssignSequenceNumber(message);
+        var seq = _assignSequence(message);
         lock (_gate)
         {
             _bySeq[seq] = new ScheduledEntry(enqueueAtUtc, message);
@@ -93,7 +95,7 @@ sealed class ScheduledStore
             }
             ArmTimer();
         }
-        foreach (var message in ready) _primary.Enqueue(message);
+        foreach (var message in ready) _enqueue(message);
         if (ready.Count > 0)
             _logger.LogTrace("Flushed {Count} scheduled messages", ready.Count);
     }

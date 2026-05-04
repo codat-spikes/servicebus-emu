@@ -31,7 +31,7 @@ sealed class InMemoryQueue : IQueueEndpoint
         Primary = new MessageBuffer(options.LockDuration, OnPrimaryLockExpired, loggerFactory.CreateLogger<MessageBuffer>());
         _deadLetter = new MessageBuffer(options.LockDuration, OnDeadLetterLockExpired, loggerFactory.CreateLogger<MessageBuffer>());
         _deadLetterReceiver = new DeadLetterReceiver(_deadLetter);
-        _scheduled = new ScheduledStore(Primary, loggerFactory.CreateLogger<ScheduledStore>());
+        _scheduled = new ScheduledStore(Primary.AssignSequenceNumber, m => Primary.Enqueue(m), loggerFactory.CreateLogger<ScheduledStore>());
         Sessions = new SessionStore(options.LockDuration, Primary, OnPrimaryLockExpired, loggerFactory);
     }
 
