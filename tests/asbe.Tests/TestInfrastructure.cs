@@ -47,12 +47,17 @@ internal sealed class TestQueue : IAsyncDisposable
                 var admin = new ServiceBusAdministrationClient(conn);
                 try
                 {
-                    await admin.CreateQueueAsync(new CreateQueueOptions(name)
+                    var createOpts = new CreateQueueOptions(name)
                     {
                         LockDuration = options.LockDuration,
                         MaxDeliveryCount = options.MaxDeliveryCount,
                         RequiresSession = options.RequiresSession,
-                    }, ct);
+                    };
+                    if (options.DefaultMessageTimeToLive is { } ttl)
+                        createOpts.DefaultMessageTimeToLive = ttl;
+                    if (options.DeadLetteringOnMessageExpiration)
+                        createOpts.DeadLetteringOnMessageExpiration = true;
+                    await admin.CreateQueueAsync(createOpts, ct);
                 }
                 catch (Exception ex) when (options.RequiresSession && ex.Message.Contains("RequiresSession", StringComparison.Ordinal))
                 {

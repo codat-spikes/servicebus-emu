@@ -17,6 +17,7 @@ sealed class MessageBuffer : IDisposable
 
     private readonly Channel<Pending> _ready = Channel.CreateUnbounded<Pending>();
     private readonly ConcurrentDictionary<long, Delivery> _inFlight = new();
+    private readonly ConcurrentDictionary<long, Delivery> _inFlightBySeq = new();
     private readonly ConcurrentDictionary<Guid, Delivery> _byLockToken = new();
     private readonly Action<Delivery> _onLockExpired;
     private readonly ILogger<MessageBuffer> _logger;
@@ -70,8 +71,21 @@ sealed class MessageBuffer : IDisposable
 
     public async Task<Delivery> DequeueAsync(CancellationToken cancellation = default)
     {
-        var pending = await _ready.Reader.ReadAsync(cancellation);
-        return StartDelivery(pending);
+        while (true)
+        {
+            var pending = await _ready.Reader.ReadAsync(cancellation);
+            // Tombstone check: a TTL eviction may have removed the message from _tracked
+            // while its Pending entry sits in the channel. Skip and pull the next one.
+            var seq = ReadSequenceNumber(pending.Message);
+            if (seq != 0)
+            {
+                lock (_trackedLock)
+                {
+                    if (!_tracked.ContainsKey(seq)) continue;
+                }
+            }
+            return StartDelivery(pending);
+        }
     }
 
     public bool TryRelease(long deliveryId, out Delivery delivery)
@@ -104,6 +118,7 @@ sealed class MessageBuffer : IDisposable
         var timer = new Timer(_ => OnLockExpired(deliveryId), null, Timeout.Infinite, Timeout.Infinite);
         var delivery = new Delivery(deliveryId, pending.Message, pending.PriorDeliveries + 1, sequenceNumber, lockToken, lockedUntil, timer);
         _inFlight[deliveryId] = delivery;
+        _inFlightBySeq[sequenceNumber] = delivery;
         _byLockToken[lockToken] = delivery;
         timer.Change(LockDuration, Timeout.InfiniteTimeSpan);
         return delivery;
@@ -146,8 +161,39 @@ sealed class MessageBuffer : IDisposable
     private void Forget(Delivery delivery)
     {
         _inFlight.TryRemove(delivery.Id, out _);
+        _inFlightBySeq.TryRemove(delivery.SequenceNumber, out _);
         _byLockToken.TryRemove(delivery.LockToken, out _);
         delivery.LockTimer.Dispose();
+    }
+
+    // Removes a ready (not in-flight) message from tracking. The Pending entry left in
+    // the channel is tombstoned: DequeueAsync sees the missing _tracked slot and skips.
+    public bool TryEvictReady(long sequenceNumber, out Message message)
+    {
+        message = null!;
+        if (_inFlightBySeq.ContainsKey(sequenceNumber)) return false;
+        lock (_trackedLock)
+        {
+            if (!_tracked.TryGetValue(sequenceNumber, out var found)) return false;
+            if (_inFlightBySeq.ContainsKey(sequenceNumber)) return false;
+            _tracked.Remove(sequenceNumber);
+            message = found;
+            return true;
+        }
+    }
+
+    public bool TryGetTracked(long sequenceNumber, out Message message)
+    {
+        lock (_trackedLock)
+        {
+            if (_tracked.TryGetValue(sequenceNumber, out var found))
+            {
+                message = found;
+                return true;
+            }
+            message = null!;
+            return false;
+        }
     }
 
     private static void SetWireDeliveryCount(Message message, int priorDeliveries)

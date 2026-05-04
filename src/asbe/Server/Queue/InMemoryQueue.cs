@@ -21,6 +21,10 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
     private readonly MessageBuffer _deadLetter;
     private readonly DeadLetterReceiver _deadLetterReceiver;
     private readonly ScheduledStore _scheduled;
+    private readonly ExpiryStore _expiry;
+    // Per-sequence reverse index: where the message lives so the expiry callback can
+    // find the right MessageBuffer (primary or a session sub-buffer) to evict from.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, MessageBuffer> _ownerBySeq = new();
     private readonly ILogger<InMemoryQueue> _logger;
 
     public InMemoryQueue(QueueOptions options, ILoggerFactory? loggerFactory = null)
@@ -31,9 +35,12 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
         Primary = new MessageBuffer(options.LockDuration, OnPrimaryLockExpired, loggerFactory.CreateLogger<MessageBuffer>());
         _deadLetter = new MessageBuffer(options.LockDuration, OnDeadLetterLockExpired, loggerFactory.CreateLogger<MessageBuffer>());
         _deadLetterReceiver = new DeadLetterReceiver(_deadLetter);
-        _scheduled = new ScheduledStore(Primary.AssignSequenceNumber, m => Primary.Enqueue(m), loggerFactory.CreateLogger<ScheduledStore>());
+        _scheduled = new ScheduledStore(Primary.AssignSequenceNumber, EnqueueFromScheduled, loggerFactory.CreateLogger<ScheduledStore>());
+        _expiry = new ExpiryStore(OnExpired, loggerFactory.CreateLogger<ExpiryStore>());
         Sessions = new SessionStore(options.LockDuration, Primary, OnPrimaryLockExpired, loggerFactory);
     }
+
+    private void EnqueueFromScheduled(Message message) => Enqueue(message);
 
     public long Schedule(Message message)
     {
@@ -49,9 +56,82 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
     {
         var sessionId = ReadSessionId(message);
         if (!string.IsNullOrEmpty(sessionId))
+        {
             Sessions.Enqueue(sessionId, message);
+            ApplyExpiry(message, Sessions.GetOrCreate(sessionId).Buffer);
+        }
         else
+        {
             Primary.Enqueue(message);
+            ApplyExpiry(message, Primary);
+        }
+    }
+
+    // Stamps Properties.AbsoluteExpiryTime from the effective TTL (min of message
+    // Header.Ttl and queue default), and registers the expiry. No-op if neither side
+    // sets a TTL — Service Bus treats that as "never expires" for our purposes.
+    private void ApplyExpiry(Message message, MessageBuffer owner)
+    {
+        var seq = ReadSeq(message);
+        if (seq == 0) return;
+
+        var messageTtl = ReadHeaderTtl(message);
+        var defaultTtl = Options.DefaultMessageTimeToLive;
+        TimeSpan? effective = (messageTtl, defaultTtl) switch
+        {
+            ({ } a, { } b) => a < b ? a : b,
+            ({ } a, null) => a,
+            (null, { } b) => b,
+            _ => null,
+        };
+        if (effective is null || effective.Value <= TimeSpan.Zero) return;
+
+        var expiresAt = DateTime.UtcNow + effective.Value;
+        message.Properties ??= new Properties();
+        message.Properties.AbsoluteExpiryTime = expiresAt;
+        _ownerBySeq[seq] = owner;
+        _expiry.Register(seq, expiresAt);
+    }
+
+    private static long ReadSeq(Message message) =>
+        message.MessageAnnotations?.Map[MessageBuffer.SequenceNumberAnnotation] is long s ? s : 0;
+
+    private static TimeSpan? ReadHeaderTtl(Message message)
+    {
+        if (message.Header is null) return null;
+        var ttl = message.Header.Ttl;
+        if (ttl == 0 || ttl == uint.MaxValue) return null;
+        return TimeSpan.FromMilliseconds(ttl);
+    }
+
+    private static bool IsExpired(Message message)
+    {
+        if (message.Properties is null) return false;
+        var t = message.Properties.AbsoluteExpiryTime;
+        return t != default && t <= DateTime.UtcNow;
+    }
+
+    private void OnExpired(long sequenceNumber)
+    {
+        if (!_ownerBySeq.TryGetValue(sequenceNumber, out var owner)) return;
+        if (!owner.TryEvictReady(sequenceNumber, out var message)) return; // peek-locked; defer to Reroute
+        _ownerBySeq.TryRemove(sequenceNumber, out _);
+        ExpireMessage(message, sequenceNumber, deliveryCount: 0);
+    }
+
+    private void ExpireMessage(Message message, long sequenceNumber, int deliveryCount)
+    {
+        if (!Options.DeadLetteringOnMessageExpiration)
+        {
+            _logger.LogInformation("TTL-expired (dropped) seq={SequenceNumber}", sequenceNumber);
+            return;
+        }
+        message.ApplicationProperties ??= new ApplicationProperties();
+        message.ApplicationProperties.Map["DeadLetterReason"] = "TTLExpiredException";
+        message.Header = null;
+        message.MessageAnnotations?.Map.Remove(MessageBuffer.SequenceNumberAnnotation);
+        _deadLetter.Enqueue(message);
+        _logger.LogInformation("TTL-expired seq={SequenceNumber} deliveryCount={DeliveryCount}", sequenceNumber, deliveryCount);
     }
 
     public Task<Delivery> DequeueAsync(CancellationToken cancellation) => Primary.DequeueAsync(cancellation);
@@ -61,7 +141,17 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
 
     public void Complete(long deliveryId)
     {
-        if (Primary.TryRelease(deliveryId, out var delivery)) Primary.Drop(delivery.SequenceNumber);
+        if (Primary.TryRelease(deliveryId, out var delivery))
+        {
+            Primary.Drop(delivery.SequenceNumber);
+            CancelExpiry(delivery.SequenceNumber);
+        }
+    }
+
+    private void CancelExpiry(long sequenceNumber)
+    {
+        _expiry.Cancel(sequenceNumber);
+        _ownerBySeq.TryRemove(sequenceNumber, out _);
     }
 
     public void Abandon(long deliveryId)
@@ -97,6 +187,13 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
 
     private void Reroute(MessageBuffer source, Delivery delivery)
     {
+        if (IsExpired(delivery.Message))
+        {
+            source.Drop(delivery.SequenceNumber);
+            _ownerBySeq.TryRemove(delivery.SequenceNumber, out _);
+            ExpireMessage(delivery.Message, delivery.SequenceNumber, delivery.DeliveryCount);
+            return;
+        }
         if (delivery.DeliveryCount >= Options.MaxDeliveryCount)
             MoveToDeadLetter(source, delivery, DeadLetterInfo.MaxDeliveryCountExceeded);
         else
@@ -107,13 +204,17 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
     {
         Sessions.Dispose();
         _scheduled.Dispose();
+        _expiry.Dispose();
         _deadLetter.Dispose();
         Primary.Dispose();
     }
 
+    internal void OnSessionDeliveryCompleted(long sequenceNumber) => CancelExpiry(sequenceNumber);
+
     private void MoveToDeadLetter(MessageBuffer source, Delivery delivery, DeadLetterInfo info)
     {
         source.Drop(delivery.SequenceNumber);
+        CancelExpiry(delivery.SequenceNumber);
         var message = delivery.Message;
         message.ApplicationProperties ??= new ApplicationProperties();
         message.ApplicationProperties.Map["DeadLetterReason"] = info.Reason;
@@ -166,7 +267,10 @@ sealed class SessionEndpoint(InMemoryQueue queue, Session session) : IQueueEndpo
     public void Complete(long deliveryId)
     {
         if (session.Buffer.TryRelease(deliveryId, out var delivery))
+        {
             session.Buffer.Drop(delivery.SequenceNumber);
+            queue.OnSessionDeliveryCompleted(delivery.SequenceNumber);
+        }
     }
 
     public void Abandon(long deliveryId)

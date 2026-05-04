@@ -1,4 +1,9 @@
-sealed record QueueOptions(TimeSpan LockDuration, int MaxDeliveryCount, bool RequiresSession = false)
+sealed record QueueOptions(
+    TimeSpan LockDuration,
+    int MaxDeliveryCount,
+    bool RequiresSession = false,
+    TimeSpan? DefaultMessageTimeToLive = null,
+    bool DeadLetteringOnMessageExpiration = false)
 {
     public static readonly QueueOptions Default = new(TimeSpan.FromSeconds(30), 10);
 }
