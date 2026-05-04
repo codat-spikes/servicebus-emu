@@ -6,7 +6,7 @@ using Amqp.Types;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-sealed class MessageBuffer
+sealed class MessageBuffer : IDisposable
 {
     // Service Bus stamps each message with x-opt-sequence-number on first enqueue and
     // preserves it across redeliveries; the SDK reads it into ServiceBusReceivedMessage.SequenceNumber
@@ -154,6 +154,16 @@ sealed class MessageBuffer
     {
         message.Header ??= new Header();
         message.Header.DeliveryCount = (uint)priorDeliveries;
+    }
+
+    public void Dispose()
+    {
+        // Lock timers root their callbacks (which capture `this`); without disposal
+        // they keep the buffer alive until the timer fires.
+        foreach (var delivery in _inFlight.Values) delivery.LockTimer.Dispose();
+        _inFlight.Clear();
+        _byLockToken.Clear();
+        _ready.Writer.TryComplete();
     }
 
     private readonly record struct Pending(Message Message, int PriorDeliveries);

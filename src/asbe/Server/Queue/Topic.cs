@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 sealed record TopicOptions(IReadOnlyDictionary<string, SubscriptionOptions> Subscriptions);
 
-sealed class Topic
+sealed class Topic : IDisposable
 {
     private static readonly Symbol SequenceNumberAnnotation = MessageBuffer.SequenceNumberAnnotation;
     private static readonly Symbol ScheduledEnqueueTimeAnnotation = "x-opt-scheduled-enqueue-time";
@@ -81,6 +81,12 @@ sealed class Topic
         for (int i = 0; i < rules.Count; i++)
             if (rules[i].Matches(message)) return true;
         return false;
+    }
+
+    public void Dispose()
+    {
+        _scheduled.Dispose();
+        foreach (var sub in _subscriptions.Values) sub.Dispose();
     }
 
     private static Message Clone(Message message)

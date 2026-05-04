@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 // Session messages share their sequence-number space with the parent queue's primary
 // buffer (they're stamped via primary.AssignSequenceNumber before being routed here),
 // so PeekMessage / sequence-number ordering stays globally consistent.
-sealed class SessionStore
+sealed class SessionStore : IDisposable
 {
     private readonly ConcurrentDictionary<string, Session> _sessions = new();
     private readonly TimeSpan _lockDuration;
@@ -124,6 +124,19 @@ sealed class SessionStore
         }
         expiresAt = default;
         return false;
+    }
+
+    public void Dispose()
+    {
+        // Unblock any parked accept-next-session waiters so their tasks complete instead
+        // of leaking; the caller will see null (= timeout/no session) and tear down.
+        lock (_waiterGate)
+        {
+            foreach (var w in _waiters) w.TrySetResult(false);
+            _waiters.Clear();
+        }
+        foreach (var session in _sessions.Values) session.Buffer.Dispose();
+        _sessions.Clear();
     }
 }
 

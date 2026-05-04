@@ -5,25 +5,32 @@ using Amqp.Types;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-sealed class AmqpServer
+sealed class AmqpServer : IAsyncDisposable
 {
     public const string LocalConnectionString = "Endpoint=sb://localhost;SharedAccessKeyName=dev;SharedAccessKey=dev;UseDevelopmentEmulator=true;";
-    private const string ListenerAddress = "amqp://127.0.0.1:5672";
+    public const int DefaultPort = 5672;
 
+    private readonly string _listenerAddress;
     private readonly QueueStore _queues;
     private readonly TxnManager _txnManager;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<AmqpServer> _logger;
-    private readonly ContainerHost _host = new([ListenerAddress]);
+    private readonly ContainerHost _host;
+    private bool _started;
+    private bool _disposed;
 
-    public AmqpServer() : this(new Dictionary<string, QueueOptions>(), null) { }
+    public AmqpServer() : this(new Dictionary<string, QueueOptions>(), null, DefaultPort) { }
 
-    public AmqpServer(ILoggerFactory? loggerFactory) : this(new Dictionary<string, QueueOptions>(), loggerFactory) { }
+    public AmqpServer(ILoggerFactory? loggerFactory) : this(new Dictionary<string, QueueOptions>(), loggerFactory, DefaultPort) { }
 
-    public AmqpServer(IReadOnlyDictionary<string, QueueOptions> queues, ILoggerFactory? loggerFactory = null)
+    public AmqpServer(int port, ILoggerFactory? loggerFactory = null) : this(new Dictionary<string, QueueOptions>(), loggerFactory, port) { }
+
+    public AmqpServer(IReadOnlyDictionary<string, QueueOptions> queues, ILoggerFactory? loggerFactory = null, int port = DefaultPort)
     {
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
         _logger = _loggerFactory.CreateLogger<AmqpServer>();
+        _listenerAddress = $"amqp://127.0.0.1:{port}";
+        _host = new ContainerHost([_listenerAddress]);
         _queues = new QueueStore(queues, RegisterManagement, _loggerFactory);
         _txnManager = new TxnManager(_loggerFactory);
     }
@@ -75,7 +82,25 @@ sealed class AmqpServer
         _host.Open();
         _host.RegisterRequestProcessor("$cbs", new CbsRequestProcessor(_loggerFactory.CreateLogger<CbsRequestProcessor>()));
         _host.RegisterLinkProcessor(new QueueLinkProcessor(_queues, _txnManager, _loggerFactory));
-        _logger.LogInformation("AMQP server listening on {Address}", ListenerAddress);
+        _started = true;
+        _logger.LogInformation("AMQP server listening on {Address}", _listenerAddress);
+    }
+
+    // The caller must dispose every connected ServiceBusClient first. ContainerHost
+    // close runs synchronously, but if a client disconnect races with our teardown the
+    // listener-side OnLinkClosed handler can deadlock against RequestProcessor.Dispose
+    // — see docs/DELETE_QUEUE_DEADLOCK.md.
+    public ValueTask DisposeAsync()
+    {
+        if (_disposed) return ValueTask.CompletedTask;
+        _disposed = true;
+        if (_started)
+        {
+            try { _host.Close(); }
+            catch (Exception ex) { _logger.LogWarning(ex, "ContainerHost close threw."); }
+        }
+        _queues.Dispose();
+        return ValueTask.CompletedTask;
     }
 
     private void RegisterManagement(string name, InMemoryQueue queue)

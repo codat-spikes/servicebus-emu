@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 // at schedule time and the same number is what callers cancel by — so we lean on the
 // primary buffer's sequence counter to keep schedule/peek/cancel in one namespace, and
 // stamp it onto the message annotation so the active queue keeps it on flush.
-sealed class ScheduledStore
+sealed class ScheduledStore : IDisposable
 {
     private readonly Func<Message, long> _assignSequence;
     private readonly Action<Message> _enqueue;
@@ -99,6 +99,8 @@ sealed class ScheduledStore
         if (ready.Count > 0)
             _logger.LogTrace("Flushed {Count} scheduled messages", ready.Count);
     }
+
+    public void Dispose() => _timer.Dispose();
 
     private readonly record struct ScheduledEntry(DateTime EnqueueAt, Message Message);
 }

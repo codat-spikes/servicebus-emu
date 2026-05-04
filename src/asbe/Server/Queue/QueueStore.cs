@@ -11,7 +11,7 @@ readonly record struct EndpointResolution(IQueueEndpoint? Queue, Topic? Topic, E
     public static EndpointResolution OfError(Error e) => new(null, null, e);
 }
 
-sealed class QueueStore
+sealed class QueueStore : IDisposable
 {
     private const string DeadLetterSuffix = "/$DeadLetterQueue";
     private const string ManagementSuffix = "/$management";
@@ -129,4 +129,12 @@ sealed class QueueStore
 
     private QueueOptions OptionsFor(string name) =>
         _configured.TryGetValue(name, out var opts) ? opts : QueueOptions.Default;
+
+    public void Dispose()
+    {
+        foreach (var topic in _topics.Values) topic.Dispose();
+        _topics.Clear();
+        foreach (var queue in _queues.Values) queue.Dispose();
+        _queues.Clear();
+    }
 }

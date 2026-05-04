@@ -4,7 +4,7 @@ using Amqp.Types;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-sealed class InMemoryQueue : IQueueEndpoint
+sealed class InMemoryQueue : IQueueEndpoint, IDisposable
 {
     private static readonly Symbol ScheduledEnqueueTimeAnnotation = "x-opt-scheduled-enqueue-time";
     // Service Bus encodes a message's session-id on the AMQP Properties.GroupId field
@@ -101,6 +101,14 @@ sealed class InMemoryQueue : IQueueEndpoint
             MoveToDeadLetter(source, delivery, DeadLetterInfo.MaxDeliveryCountExceeded);
         else
             source.Requeue(delivery);
+    }
+
+    public void Dispose()
+    {
+        Sessions.Dispose();
+        _scheduled.Dispose();
+        _deadLetter.Dispose();
+        Primary.Dispose();
     }
 
     private void MoveToDeadLetter(MessageBuffer source, Delivery delivery, DeadLetterInfo info)
