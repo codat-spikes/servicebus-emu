@@ -3,8 +3,11 @@ using Amqp.Framing;
 using Amqp.Listener;
 using Amqp.Types;
 
-sealed class QueueMessageSource(InMemoryQueue queue) : IMessageSource
+sealed class QueueMessageSource(IQueueEndpoint endpoint) : IMessageSource
 {
+    private static readonly Symbol DeadLetterReasonKey = "DeadLetterReason";
+    private static readonly Symbol DeadLetterErrorDescriptionKey = "DeadLetterErrorDescription";
+
     private readonly CancellationTokenSource _cts = new();
     private int _callbackRegistered;
 
@@ -12,7 +15,7 @@ sealed class QueueMessageSource(InMemoryQueue queue) : IMessageSource
     {
         if (Interlocked.Exchange(ref _callbackRegistered, 1) == 0)
             link.AddClosedCallback((_, _) => _cts.Cancel());
-        var delivery = await queue.DequeueAsync(_cts.Token);
+        var delivery = await endpoint.DequeueAsync(_cts.Token);
         Console.WriteLine($"Dispatch to {link.Name} (delivery={delivery.Id} count={delivery.DeliveryCount})");
         return new ReceiveContext(link, delivery.Message) { UserToken = delivery };
     }
@@ -23,32 +26,30 @@ sealed class QueueMessageSource(InMemoryQueue queue) : IMessageSource
         switch (dispositionContext.DeliveryState)
         {
             case Accepted:
-                queue.Complete(delivery.Id);
+                endpoint.Complete(delivery.Id);
                 break;
             case Released:
-                queue.Abandon(delivery.Id);
+                endpoint.Abandon(delivery.Id);
                 break;
             case Modified modified when modified.UndeliverableHere:
-                queue.DeadLetter(delivery.Id);
+                endpoint.Reject(delivery.Id, DeadLetterInfo.DeadLetteredByReceiver);
                 break;
             case Modified:
-                queue.Abandon(delivery.Id);
+                endpoint.Abandon(delivery.Id);
                 break;
             case Rejected rejected:
-                var (reason, description) = ReadDeadLetterInfo(rejected);
-                queue.DeadLetter(delivery.Id, reason, description);
+                endpoint.Reject(delivery.Id, ReadDeadLetterInfo(rejected));
                 break;
         }
         dispositionContext.Complete();
     }
 
-    private static readonly Symbol DeadLetterReasonKey = "DeadLetterReason";
-    private static readonly Symbol DeadLetterErrorDescriptionKey = "DeadLetterErrorDescription";
-
-    private static (string? Reason, string? Description) ReadDeadLetterInfo(Rejected rejected)
+    private static DeadLetterInfo ReadDeadLetterInfo(Rejected rejected)
     {
         var info = rejected.Error?.Info;
-        if (info is null) return (null, null);
-        return (info[DeadLetterReasonKey] as string, info[DeadLetterErrorDescriptionKey] as string);
+        if (info is null) return DeadLetterInfo.DeadLetteredByReceiver;
+        var reason = info[DeadLetterReasonKey] as string ?? DeadLetterInfo.DeadLetteredByReceiver.Reason;
+        var description = info[DeadLetterErrorDescriptionKey] as string ?? "";
+        return new DeadLetterInfo(reason, description);
     }
 }

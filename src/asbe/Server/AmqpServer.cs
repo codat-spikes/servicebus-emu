@@ -13,8 +13,7 @@ sealed class AmqpServer
 
     public AmqpServer(IReadOnlyDictionary<string, QueueOptions> queues)
     {
-        _queues = new QueueStore(queues);
-        _queues.QueueCreated += OnQueueCreated;
+        _queues = new QueueStore(queues, RegisterManagement);
     }
 
     public void CreateQueue(string name, QueueOptions options) => _queues.CreateQueue(name, options);
@@ -36,6 +35,6 @@ sealed class AmqpServer
         _host.RegisterLinkProcessor(new QueueLinkProcessor(_queues));
     }
 
-    private void OnQueueCreated(string name, InMemoryQueue queue) =>
+    private void RegisterManagement(string name, InMemoryQueue queue) =>
         _host.RegisterRequestProcessor(_queues.ManagementAddressFor(name), new ManagementRequestProcessor(queue));
 }

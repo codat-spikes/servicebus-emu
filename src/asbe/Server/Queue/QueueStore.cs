@@ -1,25 +1,19 @@
 using System.Collections.Concurrent;
 
-sealed class QueueStore(IReadOnlyDictionary<string, QueueOptions> configured)
+sealed class QueueStore(IReadOnlyDictionary<string, QueueOptions> configured, Action<string, InMemoryQueue> onQueueCreated)
 {
     private const string DeadLetterSuffix = "/$DeadLetterQueue";
     private const string ManagementSuffix = "/$management";
 
     private readonly ConcurrentDictionary<string, InMemoryQueue> _queues = new();
 
-    public event Action<string, InMemoryQueue>? QueueCreated;
-
     public string ManagementAddressFor(string name) => NormalizeName(name) + ManagementSuffix;
 
-    public InMemoryQueue Get(string address)
+    public IQueueEndpoint Get(string address)
     {
         var trimmed = address.TrimStart('/');
         if (trimmed.EndsWith(DeadLetterSuffix, StringComparison.Ordinal))
-        {
-            var parent = trimmed[..^DeadLetterSuffix.Length];
-            var queue = GetOrCreate(parent);
-            return queue.DeadLetterQueue ?? throw new InvalidOperationException($"Queue '{parent}' has no dead-letter queue.");
-        }
+            return GetOrCreate(trimmed[..^DeadLetterSuffix.Length]).DeadLetter;
         return GetOrCreate(trimmed);
     }
 
@@ -29,7 +23,7 @@ sealed class QueueStore(IReadOnlyDictionary<string, QueueOptions> configured)
         var queue = new InMemoryQueue(options);
         if (!_queues.TryAdd(key, queue))
             throw new InvalidOperationException($"Queue '{name}' already exists.");
-        QueueCreated?.Invoke(key, queue);
+        onQueueCreated(key, queue);
     }
 
     public bool DeleteQueue(string name) => _queues.TryRemove(NormalizeName(name), out _);
@@ -41,7 +35,7 @@ sealed class QueueStore(IReadOnlyDictionary<string, QueueOptions> configured)
         if (_queues.TryGetValue(name, out var existing)) return existing;
         var fresh = new InMemoryQueue(OptionsFor(name));
         var actual = _queues.GetOrAdd(name, fresh);
-        if (ReferenceEquals(actual, fresh)) QueueCreated?.Invoke(name, fresh);
+        if (ReferenceEquals(actual, fresh)) onQueueCreated(name, fresh);
         return actual;
     }
 

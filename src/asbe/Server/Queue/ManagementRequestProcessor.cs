@@ -36,10 +36,9 @@ sealed class ManagementRequestProcessor(InMemoryQueue queue) : IRequestProcessor
         {
             if (tokens.GetValue(i) is not Guid token)
                 return Status(400, "Lock token is not a uuid.");
-            var expiry = queue.RenewLock(token);
-            if (expiry is null)
+            if (!queue.TryRenewLock(token, out var expiresAt))
                 return Status(410, $"Lock token {token} is no longer held.");
-            expirations[i] = expiry.Value;
+            expirations[i] = expiresAt;
         }
 
         return Ok(new Map { ["expirations"] = expirations });

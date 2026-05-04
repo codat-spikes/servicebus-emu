@@ -22,15 +22,15 @@ sealed class QueueLinkProcessor(QueueStore queues) : ILinkProcessor
         }
 
         attach.MaxMessageSize = MaxMessageSize;
-        var queue = queues.Get(address);
+        var endpoint = queues.Get(address);
 
         if (!attach.Role)
         {
-            attachContext.Complete(new TargetLinkEndpoint(new QueueMessageSink(queue), attachContext.Link), 100);
+            attachContext.Complete(new TargetLinkEndpoint(new QueueMessageSink(endpoint), attachContext.Link), 100);
         }
         else
         {
-            attachContext.Complete(new DrainAwareSourceLinkEndpoint(new QueueMessageSource(queue), attachContext.Link), 0);
+            attachContext.Complete(new DrainAwareSourceLinkEndpoint(new QueueMessageSource(endpoint), attachContext.Link), 0);
         }
     }
 }

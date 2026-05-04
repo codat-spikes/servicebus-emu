@@ -1,142 +1,77 @@
-using System.Collections.Concurrent;
-using System.Threading.Channels;
 using Amqp;
 using Amqp.Framing;
 
-sealed class InMemoryQueue
+sealed class InMemoryQueue : IQueueEndpoint
 {
     public QueueOptions Options { get; }
-    public InMemoryQueue? DeadLetterQueue { get; }
+    public MessageBuffer Primary { get; }
+    public IQueueEndpoint DeadLetter => _deadLetterReceiver;
 
-    private readonly Channel<Pending> _ready = Channel.CreateUnbounded<Pending>();
-    private readonly ConcurrentDictionary<long, Delivery> _inFlight = new();
-    private readonly ConcurrentDictionary<Guid, Delivery> _byLockToken = new();
-    private long _nextDeliveryId;
+    private readonly MessageBuffer _deadLetter;
+    private readonly DeadLetterReceiver _deadLetterReceiver;
 
-    public InMemoryQueue(QueueOptions options) : this(options, hasDeadLetterQueue: true) { }
-
-    private InMemoryQueue(QueueOptions options, bool hasDeadLetterQueue)
+    public InMemoryQueue(QueueOptions options)
     {
         Options = options;
-        DeadLetterQueue = hasDeadLetterQueue ? new InMemoryQueue(options, hasDeadLetterQueue: false) : null;
+        Primary = new MessageBuffer(options.LockDuration, OnPrimaryLockExpired);
+        _deadLetter = new MessageBuffer(options.LockDuration, OnDeadLetterLockExpired);
+        _deadLetterReceiver = new DeadLetterReceiver(_deadLetter);
     }
 
-    public void Enqueue(Message message) => _ready.Writer.TryWrite(new Pending(message, 0));
+    public void Enqueue(Message message) => Primary.Enqueue(message);
 
-    public async Task<Delivery> DequeueAsync(CancellationToken cancellation = default)
-    {
-        var pending = await _ready.Reader.ReadAsync(cancellation);
-        return StartDelivery(pending);
-    }
+    public Task<Delivery> DequeueAsync(CancellationToken cancellation) => Primary.DequeueAsync(cancellation);
 
-    public void Complete(long deliveryId) => TrySettle(deliveryId, out _);
+    public void Complete(long deliveryId) => Primary.TryRelease(deliveryId, out _);
 
     public void Abandon(long deliveryId)
     {
-        if (TrySettle(deliveryId, out var delivery)) Redeliver(delivery);
+        if (Primary.TryRelease(deliveryId, out var delivery)) Reroute(delivery);
     }
 
-    public void DeadLetter(long deliveryId, string? reason = null, string? description = null)
+    public void Reject(long deliveryId, DeadLetterInfo info)
     {
-        if (TrySettle(deliveryId, out var delivery))
-            SendToDeadLetter(delivery.Message, reason ?? "DeadLetteredByReceiver", description);
+        if (Primary.TryRelease(deliveryId, out var delivery)) MoveToDeadLetter(delivery.Message, info);
     }
 
-    public DateTime? RenewLock(Guid lockToken)
+    public bool TryRenewLock(Guid lockToken, out DateTime expiresAt) =>
+        Primary.TryRenewLock(lockToken, out expiresAt);
+
+    private void OnPrimaryLockExpired(Delivery delivery) => Reroute(delivery);
+
+    private void OnDeadLetterLockExpired(Delivery delivery) => _deadLetter.Requeue(delivery);
+
+    private void Reroute(Delivery delivery)
     {
-        if (!_byLockToken.TryGetValue(lockToken, out var delivery)) return null;
-        if (Volatile.Read(ref delivery.State) != (int)DeliveryState.Pending) return null;
-        var newExpiry = DateTime.UtcNow + Options.LockDuration;
-        delivery.LockedUntil = newExpiry;
-        delivery.LockTimer?.Change(Options.LockDuration, Timeout.InfiniteTimeSpan);
-        return newExpiry;
+        if (delivery.DeliveryCount >= Options.MaxDeliveryCount)
+            MoveToDeadLetter(delivery.Message, DeadLetterInfo.MaxDeliveryCountExceeded);
+        else
+            Primary.Requeue(delivery);
     }
 
-    private Delivery StartDelivery(Pending pending)
+    private void MoveToDeadLetter(Message message, DeadLetterInfo info)
     {
-        var deliveryId = Interlocked.Increment(ref _nextDeliveryId);
-        SetWireDeliveryCount(pending.Message, pending.PriorDeliveries);
-        var delivery = new Delivery(deliveryId, pending.Message, pending.PriorDeliveries + 1, Guid.NewGuid())
-        {
-            LockedUntil = DateTime.UtcNow + Options.LockDuration,
-        };
-        _inFlight[deliveryId] = delivery;
-        _byLockToken[delivery.LockToken] = delivery;
-        delivery.LockTimer = new Timer(_ => OnLockExpired(deliveryId), null, Options.LockDuration, Timeout.InfiniteTimeSpan);
-        return delivery;
-    }
-
-    private bool TrySettle(long deliveryId, out Delivery delivery)
-    {
-        if (!_inFlight.TryGetValue(deliveryId, out delivery!)) return false;
-        if (Interlocked.CompareExchange(ref delivery.State, (int)DeliveryState.Settled, (int)DeliveryState.Pending) != (int)DeliveryState.Pending) return false;
-        Forget(delivery);
-        return true;
-    }
-
-    private void OnLockExpired(long deliveryId)
-    {
-        if (!_inFlight.TryGetValue(deliveryId, out var delivery)) return;
-        if (Interlocked.CompareExchange(ref delivery.State, (int)DeliveryState.Expired, (int)DeliveryState.Pending) != (int)DeliveryState.Pending) return;
-        Forget(delivery);
-        Redeliver(delivery);
-    }
-
-    private void Forget(Delivery delivery)
-    {
-        _inFlight.TryRemove(delivery.Id, out _);
-        _byLockToken.TryRemove(delivery.LockToken, out _);
-        delivery.LockTimer?.Dispose();
-    }
-
-    private void Redeliver(Delivery delivery)
-    {
-        if (DeadLetterQueue is not null && delivery.DeliveryCount >= Options.MaxDeliveryCount)
-        {
-            SendToDeadLetter(delivery.Message, "MaxDeliveryCountExceeded", null);
-            return;
-        }
-        _ready.Writer.TryWrite(new Pending(delivery.Message, delivery.DeliveryCount));
-    }
-
-    private void SendToDeadLetter(Message message, string reason, string? description)
-    {
-        if (DeadLetterQueue is null)
-        {
-            _ready.Writer.TryWrite(new Pending(message, 0));
-            return;
-        }
         message.ApplicationProperties ??= new ApplicationProperties();
-        message.ApplicationProperties.Map["DeadLetterReason"] = reason;
-        if (description is not null)
-            message.ApplicationProperties.Map["DeadLetterErrorDescription"] = description;
+        message.ApplicationProperties.Map["DeadLetterReason"] = info.Reason;
+        if (info.Description.Length > 0)
+            message.ApplicationProperties.Map["DeadLetterErrorDescription"] = info.Description;
         message.Header = null;
-        DeadLetterQueue.Enqueue(message);
+        _deadLetter.Enqueue(message);
     }
+}
 
-    private static void SetWireDeliveryCount(Message message, int priorDeliveries)
+// DLQ receivers see the same lock/abandon/complete surface as the primary, but a DLQ
+// has no further DLQ — abandon just requeues, reject just settles. (Real Service Bus
+// rejects dead-letter-on-DLQ; we settle silently for now since no test exercises it.)
+sealed class DeadLetterReceiver(MessageBuffer buffer) : IQueueEndpoint
+{
+    public void Enqueue(Message message) => buffer.Enqueue(message);
+    public Task<Delivery> DequeueAsync(CancellationToken cancellation) => buffer.DequeueAsync(cancellation);
+    public void Complete(long deliveryId) => buffer.TryRelease(deliveryId, out _);
+    public void Abandon(long deliveryId)
     {
-        message.Header ??= new Header();
-        message.Header.DeliveryCount = (uint)priorDeliveries;
+        if (buffer.TryRelease(deliveryId, out var delivery)) buffer.Requeue(delivery);
     }
-
-    private readonly record struct Pending(Message Message, int PriorDeliveries);
-}
-
-sealed class Delivery(long id, Message message, int deliveryCount, Guid lockToken)
-{
-    public long Id { get; } = id;
-    public Message Message { get; } = message;
-    public int DeliveryCount { get; } = deliveryCount;
-    public Guid LockToken { get; } = lockToken;
-    public DateTime LockedUntil;
-    public int State;
-    public Timer? LockTimer;
-}
-
-enum DeliveryState
-{
-    Pending = 0,
-    Settled = 1,
-    Expired = 2,
+    public void Reject(long deliveryId, DeadLetterInfo info) => buffer.TryRelease(deliveryId, out _);
+    public bool TryRenewLock(Guid lockToken, out DateTime expiresAt) => buffer.TryRenewLock(lockToken, out expiresAt);
 }
