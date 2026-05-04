@@ -13,6 +13,11 @@ sealed class QueueLinkProcessor : ILinkProcessor
     // SB-specific error condition the Azure SDK maps to ServiceBusFailureReason.SessionCannotBeLocked.
     // Without this, the SDK falls back to GeneralError.
     private static readonly Symbol SessionCannotBeLockedError = "com.microsoft:session-cannot-be-locked";
+    // SB sends the operation timeout as a uint (ms) on attach.Properties; we use it as
+    // the bound for "next available session" waits. Real Service Bus blocks for the full
+    // duration before signalling timeout to the SDK.
+    private static readonly Symbol OperationTimeout = "com.microsoft:timeout";
+    private static readonly TimeSpan DefaultNextSessionTimeout = TimeSpan.FromSeconds(60);
 
     private readonly QueueStore _queues;
     private readonly ILoggerFactory _loggerFactory;
@@ -90,30 +95,56 @@ sealed class QueueLinkProcessor : ILinkProcessor
             return;
         }
 
-        Session session;
         if (requestedSessionId is null)
         {
-            // Next-available-session: pick any session that has messages and isn't locked.
-            // If none are available, reject the attach so the SDK retries / surfaces a timeout.
-            var candidate = queue.Sessions.TryFindUnlockedWithMessages();
-            if (candidate is null)
-            {
-                attachContext.Complete(new Error(ErrorCode.NotFound) { Description = "No unlocked session with pending messages." });
-                return;
-            }
-            session = candidate;
-        }
-        else
-        {
-            session = queue.Sessions.GetOrCreate(requestedSessionId);
+            // Defer the attach: park it until a session becomes available or the SDK's
+            // operation timeout elapses. Service Bus's broker holds the attach open for
+            // the full duration; firing back NotFound immediately is the parity gap we're
+            // closing here.
+            var timeout = ReadOperationTimeout(attach) ?? DefaultNextSessionTimeout;
+            _ = Task.Run(() => WaitAndAttachNextSessionAsync(attachContext, queue, timeout));
+            return;
         }
 
+        var session = queue.Sessions.GetOrCreate(requestedSessionId);
         if (!session.TryAcquireLock(out var lockToken, out var lockedUntil))
         {
             attachContext.Complete(new Error(SessionCannotBeLockedError) { Description = $"Session '{session.Id}' is already locked." });
             return;
         }
+        CompleteSessionAttach(attachContext, queue, session, lockToken, lockedUntil);
+    }
 
+    private async Task WaitAndAttachNextSessionAsync(AttachContext attachContext, InMemoryQueue queue, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            var remaining = deadline - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+            {
+                attachContext.Complete(new Error(ErrorCode.NotFound) { Description = "No unlocked session with pending messages." });
+                return;
+            }
+            var candidate = await queue.Sessions.WaitForUnlockedWithMessagesAsync(remaining, CancellationToken.None).ConfigureAwait(false);
+            if (candidate is null)
+            {
+                attachContext.Complete(new Error(ErrorCode.NotFound) { Description = "No unlocked session with pending messages." });
+                return;
+            }
+            // Race: another waiter on the same signal may grab the lock first. Loop and
+            // wait again rather than rejecting the attach.
+            if (candidate.TryAcquireLock(out var lockToken, out var lockedUntil))
+            {
+                CompleteSessionAttach(attachContext, queue, candidate, lockToken, lockedUntil);
+                return;
+            }
+        }
+    }
+
+    private void CompleteSessionAttach(AttachContext attachContext, InMemoryQueue queue, Session session, Guid lockToken, DateTime lockedUntil)
+    {
+        var attach = attachContext.Attach;
         // Echo the session-id back in the source filter set and stamp the lock expiry into
         // the link properties — the SB SDK reads both of these from the response attach.
         if (attach.Source is Source source)
@@ -129,11 +160,23 @@ sealed class QueueLinkProcessor : ILinkProcessor
         var listenerLink = attachContext.Link;
         listenerLink.AddClosedCallback((_, _) =>
         {
-            session.Release(lockToken);
+            queue.Sessions.ReleaseLock(session, lockToken);
             _logger.LogInformation("Session receiver detached id={SessionId}", session.Id);
         });
         _logger.LogInformation("Session receiver attached id={SessionId} lockedUntil={LockedUntil:O}", session.Id, lockedUntil);
         attachContext.Complete(new DrainAwareSourceLinkEndpoint(src, listenerLink), 0);
+    }
+
+    private static TimeSpan? ReadOperationTimeout(Attach attach)
+    {
+        if (attach.Properties is null || !attach.Properties.ContainsKey(OperationTimeout)) return null;
+        return attach.Properties[OperationTimeout] switch
+        {
+            uint ms => TimeSpan.FromMilliseconds(ms),
+            int ms when ms >= 0 => TimeSpan.FromMilliseconds(ms),
+            long ms when ms >= 0 => TimeSpan.FromMilliseconds(ms),
+            _ => null,
+        };
     }
 
     private static bool TryReadSessionFilter(Attach attach, out bool hasFilter, out string? sessionId)

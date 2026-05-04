@@ -19,6 +19,9 @@ sealed class SessionStore
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<SessionStore> _logger;
 
+    private readonly object _waiterGate = new();
+    private readonly LinkedList<TaskCompletionSource<bool>> _waiters = new();
+
     public SessionStore(
         TimeSpan lockDuration,
         MessageBuffer primary,
@@ -48,6 +51,7 @@ sealed class SessionStore
     {
         _primary.AssignSequenceNumber(message);
         GetOrCreate(sessionId).Buffer.Enqueue(message);
+        SignalWaiters();
     }
 
     // Picks any session that has pending messages and isn't currently locked. Used by
@@ -61,6 +65,55 @@ sealed class SessionStore
             return session;
         }
         return null;
+    }
+
+    // Async variant for "next available session" attach. Real Service Bus blocks the
+    // attach until a session becomes available or the operation times out; we mirror that
+    // by parking the attach on a TCS that gets pulsed whenever a session is enqueued or a
+    // session lock is released. Returns null on timeout / cancellation.
+    public async Task<Session?> WaitForUnlockedWithMessagesAsync(TimeSpan timeout, CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            var candidate = TryFindUnlockedWithMessages();
+            if (candidate is not null) return candidate;
+
+            var remaining = deadline - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero) return null;
+
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            LinkedListNode<TaskCompletionSource<bool>> node;
+            lock (_waiterGate) node = _waiters.AddLast(tcs);
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(remaining);
+                using var reg = cts.Token.Register(static s => ((TaskCompletionSource<bool>)s!).TrySetResult(false), tcs);
+                await tcs.Task.ConfigureAwait(false);
+                if (ct.IsCancellationRequested) return null;
+            }
+            finally
+            {
+                lock (_waiterGate) _waiters.Remove(node);
+            }
+        }
+    }
+
+    // Releases the session lock and pulses waiters parked on WaitForUnlockedWithMessagesAsync
+    // so the next "accept next session" attach can pick it up.
+    public void ReleaseLock(Session session, Guid token)
+    {
+        session.Release(token);
+        if (session.Buffer.HasPending) SignalWaiters();
+    }
+
+    private void SignalWaiters()
+    {
+        lock (_waiterGate)
+        {
+            foreach (var w in _waiters) w.TrySetResult(true);
+        }
     }
 
     public bool TryRenewMessageLock(Guid lockToken, out DateTime expiresAt)

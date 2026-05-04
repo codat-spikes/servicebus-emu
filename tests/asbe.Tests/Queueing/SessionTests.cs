@@ -145,4 +145,30 @@ public sealed class SessionTests
         Assert.Equal("only-msg", msg!.Body.ToString());
         await receiver.CompleteMessageAsync(msg, ct);
     }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Timing")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task NextAvailableSession_BlocksUntilSessionAppears(Transport transport)
+    {
+        // Real Service Bus holds an "accept next session" attach open until a session
+        // becomes available (or the operation times out). Start the accept first, then
+        // produce a message — the accept should unblock and pick it up.
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.SessionOptions, ct);
+
+        var acceptTask = fx.Client.AcceptNextSessionAsync(fx.Name, cancellationToken: ct);
+        await Task.Delay(TimeSpan.FromSeconds(1), ct);
+        Assert.False(acceptTask.IsCompleted, "AcceptNextSession should still be pending while the queue is empty");
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessageAsync(new ServiceBusMessage("late") { SessionId = "LATE" }, ct);
+
+        await using var receiver = await acceptTask;
+        Assert.Equal("LATE", receiver.SessionId);
+        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(msg);
+        Assert.Equal("late", msg!.Body.ToString());
+        await receiver.CompleteMessageAsync(msg, ct);
+    }
 }
