@@ -9,7 +9,9 @@ using Amqp.Listener;
 // inside ListenerLink.SendMessage, so PeekLock receivers see Guid.Empty as their lock
 // token and CompleteMessageAsync throws "not supported for peeked messages." The send
 // path raises an IHandler event with the Delivery before the default tag is filled in,
-// which is the only public seam where we can substitute a 16-byte GUID.
+// which is the only public seam where we can substitute a 16-byte GUID. We also need
+// the wire tag to match the LockToken on our queue-side Delivery so $management requests
+// (renew-lock, etc.) can find the same delivery the SDK is referring to.
 sealed class LockTokenHandler : IHandler
 {
     public bool CanHandle(EventId id) => id == EventId.SendDelivery;
@@ -18,7 +20,11 @@ sealed class LockTokenHandler : IHandler
     {
         if (@event.Context is IDelivery delivery && delivery.Tag is null)
         {
-            delivery.Tag = Guid.NewGuid().ToByteArray();
+            // SourceLinkEndpoint passes the ReceiveContext as the wire delivery's UserToken,
+            // and QueueMessageSource stuffs our Delivery into ReceiveContext.UserToken.
+            var token = ((delivery.UserToken as ReceiveContext)?.UserToken as Delivery)?.LockToken
+                        ?? Guid.NewGuid();
+            delivery.Tag = token.ToByteArray();
         }
     }
 }

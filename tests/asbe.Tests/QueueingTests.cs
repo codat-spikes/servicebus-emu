@@ -100,6 +100,34 @@ public sealed class QueueingTests
 
     [Theory]
     [MemberData(nameof(Transports))]
+    public async Task PeekLock_RenewLock_ExtendsLock(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, FastOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessageAsync(new ServiceBusMessage("renew-me"), ct);
+
+        await using var receiver = fx.Client.CreateReceiver(fx.Name);
+        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(msg);
+        var originalLockedUntil = msg!.LockedUntil;
+
+        await Task.Delay(TimeSpan.FromSeconds(3), ct);
+        await receiver.RenewMessageLockAsync(msg, ct);
+        Assert.True(msg.LockedUntil > originalLockedUntil,
+            $"LockedUntil {msg.LockedUntil:O} should be later than the original {originalLockedUntil:O}.");
+
+        // Past the original 5s lock; the renewal kept it ours.
+        await Task.Delay(TimeSpan.FromSeconds(3), ct);
+        await receiver.CompleteMessageAsync(msg, ct);
+
+        var second = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2), ct);
+        Assert.Null(second);
+    }
+
+    [Theory]
+    [MemberData(nameof(Transports))]
     public async Task MaxDeliveryCount_RoutesMessageToDeadLetterQueue(Transport transport)
     {
         var ct = TestContext.Current.CancellationToken;

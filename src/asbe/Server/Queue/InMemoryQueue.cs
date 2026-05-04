@@ -10,6 +10,7 @@ sealed class InMemoryQueue
 
     private readonly Channel<Pending> _ready = Channel.CreateUnbounded<Pending>();
     private readonly ConcurrentDictionary<long, Delivery> _inFlight = new();
+    private readonly ConcurrentDictionary<Guid, Delivery> _byLockToken = new();
     private long _nextDeliveryId;
 
     public InMemoryQueue(QueueOptions options) : this(options, hasDeadLetterQueue: true) { }
@@ -41,12 +42,26 @@ sealed class InMemoryQueue
             SendToDeadLetter(delivery.Message, reason ?? "DeadLetteredByReceiver", description);
     }
 
+    public DateTime? RenewLock(Guid lockToken)
+    {
+        if (!_byLockToken.TryGetValue(lockToken, out var delivery)) return null;
+        if (Volatile.Read(ref delivery.State) != (int)DeliveryState.Pending) return null;
+        var newExpiry = DateTime.UtcNow + Options.LockDuration;
+        delivery.LockedUntil = newExpiry;
+        delivery.LockTimer?.Change(Options.LockDuration, Timeout.InfiniteTimeSpan);
+        return newExpiry;
+    }
+
     private Delivery StartDelivery(Pending pending)
     {
         var deliveryId = Interlocked.Increment(ref _nextDeliveryId);
         SetWireDeliveryCount(pending.Message, pending.PriorDeliveries);
-        var delivery = new Delivery(deliveryId, pending.Message, pending.PriorDeliveries + 1);
+        var delivery = new Delivery(deliveryId, pending.Message, pending.PriorDeliveries + 1, Guid.NewGuid())
+        {
+            LockedUntil = DateTime.UtcNow + Options.LockDuration,
+        };
         _inFlight[deliveryId] = delivery;
+        _byLockToken[delivery.LockToken] = delivery;
         delivery.LockTimer = new Timer(_ => OnLockExpired(deliveryId), null, Options.LockDuration, Timeout.InfiniteTimeSpan);
         return delivery;
     }
@@ -55,8 +70,7 @@ sealed class InMemoryQueue
     {
         if (!_inFlight.TryGetValue(deliveryId, out delivery!)) return false;
         if (Interlocked.CompareExchange(ref delivery.State, (int)DeliveryState.Settled, (int)DeliveryState.Pending) != (int)DeliveryState.Pending) return false;
-        _inFlight.TryRemove(deliveryId, out _);
-        delivery.LockTimer?.Dispose();
+        Forget(delivery);
         return true;
     }
 
@@ -64,9 +78,15 @@ sealed class InMemoryQueue
     {
         if (!_inFlight.TryGetValue(deliveryId, out var delivery)) return;
         if (Interlocked.CompareExchange(ref delivery.State, (int)DeliveryState.Expired, (int)DeliveryState.Pending) != (int)DeliveryState.Pending) return;
-        _inFlight.TryRemove(deliveryId, out _);
-        delivery.LockTimer?.Dispose();
+        Forget(delivery);
         Redeliver(delivery);
+    }
+
+    private void Forget(Delivery delivery)
+    {
+        _inFlight.TryRemove(delivery.Id, out _);
+        _byLockToken.TryRemove(delivery.LockToken, out _);
+        delivery.LockTimer?.Dispose();
     }
 
     private void Redeliver(Delivery delivery)
@@ -103,11 +123,13 @@ sealed class InMemoryQueue
     private readonly record struct Pending(Message Message, int PriorDeliveries);
 }
 
-sealed class Delivery(long id, Message message, int deliveryCount)
+sealed class Delivery(long id, Message message, int deliveryCount, Guid lockToken)
 {
     public long Id { get; } = id;
     public Message Message { get; } = message;
     public int DeliveryCount { get; } = deliveryCount;
+    public Guid LockToken { get; } = lockToken;
+    public DateTime LockedUntil;
     public int State;
     public Timer? LockTimer;
 }

@@ -14,11 +14,17 @@ sealed class AmqpServer
     public AmqpServer(IReadOnlyDictionary<string, QueueOptions> queues)
     {
         _queues = new QueueStore(queues);
+        _queues.QueueCreated += OnQueueCreated;
     }
 
     public void CreateQueue(string name, QueueOptions options) => _queues.CreateQueue(name, options);
 
-    public bool DeleteQueue(string name) => _queues.DeleteQueue(name);
+    public bool DeleteQueue(string name)
+    {
+        if (!_queues.DeleteQueue(name)) return false;
+        _host.UnregisterRequestProcessor(_queues.ManagementAddressFor(name));
+        return true;
+    }
 
     public void Start()
     {
@@ -29,4 +35,7 @@ sealed class AmqpServer
         _host.RegisterRequestProcessor("$cbs", new CbsRequestProcessor());
         _host.RegisterLinkProcessor(new QueueLinkProcessor(_queues));
     }
+
+    private void OnQueueCreated(string name, InMemoryQueue queue) =>
+        _host.RegisterRequestProcessor(_queues.ManagementAddressFor(name), new ManagementRequestProcessor(queue));
 }
