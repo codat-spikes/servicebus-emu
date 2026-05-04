@@ -28,7 +28,8 @@ tasks:
   test:
     desc: Run tests (provide tests/asbe.Tests/appsettings.test.json to also exercise the Azure transport)
     cmds:
-      - dotnet run --project {{.TEST_PROJECT}}
+      # --no-ansi/--no-progress make the MTP runner emit plain stdout so output isn't lost when piped or captured.
+      - dotnet run --project {{.TEST_PROJECT}} -- --no-ansi --no-progress {{.CLI_ARGS}}
 
   sb:up:
     desc: Create (idempotent) Azure Service Bus namespace + test queues, then print connection string

@@ -10,6 +10,9 @@ sealed class ManagementRequestProcessor(InMemoryQueue queue) : IRequestProcessor
     private const string StatusCodeKey = "statusCode";
     private const string StatusDescriptionKey = "statusDescription";
     private const string RenewLockOperation = "com.microsoft:renew-lock";
+    private const string PeekMessageOperation = "com.microsoft:peek-message";
+    private const string ScheduleMessageOperation = "com.microsoft:schedule-message";
+    private const string CancelScheduledMessageOperation = "com.microsoft:cancel-scheduled-message";
 
     public int Credit => 100;
 
@@ -21,6 +24,9 @@ sealed class ManagementRequestProcessor(InMemoryQueue queue) : IRequestProcessor
         var response = op switch
         {
             RenewLockOperation => RenewLock(requestContext.Message),
+            PeekMessageOperation => Peek(requestContext.Message),
+            ScheduleMessageOperation => Schedule(requestContext.Message),
+            CancelScheduledMessageOperation => CancelScheduled(requestContext.Message),
             _ => Status(501, $"Operation '{op}' is not supported."),
         };
         requestContext.Complete(response);
@@ -42,6 +48,75 @@ sealed class ManagementRequestProcessor(InMemoryQueue queue) : IRequestProcessor
         }
 
         return Ok(new Map { ["expirations"] = expirations });
+    }
+
+    private Message Peek(Message request)
+    {
+        if (request.Body is not Map body)
+            return Status(400, "Missing peek body.");
+        if (body["from-sequence-number"] is not long fromSeq)
+            return Status(400, "Missing from-sequence-number.");
+        var maxCount = body["message-count"] is int n ? n : 1;
+
+        var messages = queue.Peek(fromSeq, maxCount);
+        if (messages.Count == 0)
+            return Status(204, "No messages available.");
+
+        var entries = new List();
+        foreach (var message in messages)
+        {
+            var encoded = message.Encode();
+            var bytes = new byte[encoded.Length];
+            Buffer.BlockCopy(encoded.Buffer, encoded.Offset, bytes, 0, encoded.Length);
+            entries.Add(new Map { ["message"] = bytes });
+        }
+
+        return new Message
+        {
+            BodySection = new AmqpValue { Value = new Map { ["messages"] = entries } },
+            ApplicationProperties = new ApplicationProperties
+            {
+                [StatusCodeKey] = 200,
+                [StatusDescriptionKey] = "OK",
+            },
+        };
+    }
+
+    private Message Schedule(Message request)
+    {
+        if (request.Body is not Map body) return Status(400, "Missing schedule body.");
+        if (body["messages"] is not System.Collections.IList entries || entries.Count == 0)
+            return Status(400, "Missing messages.");
+
+        var sequenceNumbers = new long[entries.Count];
+        for (int i = 0; i < entries.Count; i++)
+        {
+            if (entries[i] is not Map entry) return Status(400, "Schedule entry is not a map.");
+            var payload = entry["message"];
+            byte[] bytes = payload switch
+            {
+                byte[] b => b,
+                ArraySegment<byte> seg => seg.ToArray(),
+                _ => null!,
+            };
+            if (bytes is null) return Status(400, "Schedule entry message must be binary.");
+
+            var decoded = Message.Decode(new ByteBuffer(bytes, 0, bytes.Length, bytes.Length));
+            sequenceNumbers[i] = queue.Schedule(decoded);
+        }
+
+        return Ok(new Map { ["sequence-numbers"] = sequenceNumbers });
+    }
+
+    private Message CancelScheduled(Message request)
+    {
+        if (request.Body is not Map body) return Status(400, "Missing cancel body.");
+        if (body["sequence-numbers"] is not Array tokens) return Status(400, "Missing sequence-numbers.");
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            if (tokens.GetValue(i) is long seq) queue.CancelScheduled(seq);
+        }
+        return Status(200, "OK");
     }
 
     private static Message Status(int code, string description) =>

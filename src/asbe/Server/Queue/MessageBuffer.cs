@@ -2,16 +2,25 @@ using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Amqp;
 using Amqp.Framing;
+using Amqp.Types;
 
 sealed class MessageBuffer
 {
+    // Service Bus stamps each message with x-opt-sequence-number on first enqueue and
+    // preserves it across redeliveries; the SDK reads it into ServiceBusReceivedMessage.SequenceNumber
+    // and peek requests are anchored on it.
+    public static readonly Symbol SequenceNumberAnnotation = "x-opt-sequence-number";
+
     public TimeSpan LockDuration { get; }
 
     private readonly Channel<Pending> _ready = Channel.CreateUnbounded<Pending>();
     private readonly ConcurrentDictionary<long, Delivery> _inFlight = new();
     private readonly ConcurrentDictionary<Guid, Delivery> _byLockToken = new();
     private readonly Action<Delivery> _onLockExpired;
+    private readonly object _trackedLock = new();
+    private readonly SortedDictionary<long, Message> _tracked = new();
     private long _nextDeliveryId;
+    private long _nextSequenceNumber;
 
     public MessageBuffer(TimeSpan lockDuration, Action<Delivery> onLockExpired)
     {
@@ -19,9 +28,36 @@ sealed class MessageBuffer
         _onLockExpired = onLockExpired;
     }
 
-    public void Enqueue(Message message) => _ready.Writer.TryWrite(new Pending(message, 0));
+    public long Enqueue(Message message)
+    {
+        var seq = AssignSequenceIfMissing(message);
+        lock (_trackedLock) _tracked[seq] = message;
+        _ready.Writer.TryWrite(new Pending(message, 0));
+        return seq;
+    }
 
     public void Requeue(Delivery delivery) => _ready.Writer.TryWrite(new Pending(delivery.Message, delivery.DeliveryCount));
+
+    public void Drop(long sequenceNumber)
+    {
+        lock (_trackedLock) _tracked.Remove(sequenceNumber);
+    }
+
+    public IReadOnlyList<Message> Peek(long fromSequenceNumber, int maxCount)
+    {
+        if (maxCount <= 0) return [];
+        var result = new List<Message>();
+        lock (_trackedLock)
+        {
+            foreach (var (seq, message) in _tracked)
+            {
+                if (seq < fromSequenceNumber) continue;
+                result.Add(message);
+                if (result.Count >= maxCount) break;
+            }
+        }
+        return result;
+    }
 
     public async Task<Delivery> DequeueAsync(CancellationToken cancellation = default)
     {
@@ -53,15 +89,31 @@ sealed class MessageBuffer
     {
         var deliveryId = Interlocked.Increment(ref _nextDeliveryId);
         SetWireDeliveryCount(pending.Message, pending.PriorDeliveries);
+        var sequenceNumber = ReadSequenceNumber(pending.Message);
         var lockToken = Guid.NewGuid();
         var lockedUntil = DateTime.UtcNow + LockDuration;
         var timer = new Timer(_ => OnLockExpired(deliveryId), null, Timeout.Infinite, Timeout.Infinite);
-        var delivery = new Delivery(deliveryId, pending.Message, pending.PriorDeliveries + 1, lockToken, lockedUntil, timer);
+        var delivery = new Delivery(deliveryId, pending.Message, pending.PriorDeliveries + 1, sequenceNumber, lockToken, lockedUntil, timer);
         _inFlight[deliveryId] = delivery;
         _byLockToken[lockToken] = delivery;
         timer.Change(LockDuration, Timeout.InfiniteTimeSpan);
         return delivery;
     }
+
+    public long AssignSequenceNumber(Message message) => AssignSequenceIfMissing(message);
+
+    private long AssignSequenceIfMissing(Message message)
+    {
+        message.MessageAnnotations ??= new MessageAnnotations();
+        var existing = message.MessageAnnotations.Map[SequenceNumberAnnotation];
+        if (existing is long seq) return seq;
+        seq = Interlocked.Increment(ref _nextSequenceNumber);
+        message.MessageAnnotations.Map[SequenceNumberAnnotation] = seq;
+        return seq;
+    }
+
+    private static long ReadSequenceNumber(Message message) =>
+        message.MessageAnnotations?.Map[SequenceNumberAnnotation] is long seq ? seq : 0;
 
     private void OnLockExpired(long deliveryId)
     {
@@ -88,11 +140,12 @@ sealed class MessageBuffer
     private readonly record struct Pending(Message Message, int PriorDeliveries);
 }
 
-sealed class Delivery(long id, Message message, int deliveryCount, Guid lockToken, DateTime lockedUntil, Timer lockTimer)
+sealed class Delivery(long id, Message message, int deliveryCount, long sequenceNumber, Guid lockToken, DateTime lockedUntil, Timer lockTimer)
 {
     public long Id { get; } = id;
     public Message Message { get; } = message;
     public int DeliveryCount { get; } = deliveryCount;
+    public long SequenceNumber { get; } = sequenceNumber;
     public Guid LockToken { get; } = lockToken;
     public Timer LockTimer { get; } = lockTimer;
     public DateTime LockedUntil = lockedUntil;

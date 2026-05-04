@@ -1,3 +1,5 @@
+using System.Reflection;
+using Amqp;
 using Amqp.Handler;
 using Amqp.Listener;
 
@@ -34,18 +36,47 @@ sealed class LockTokenHandler : IHandler
 // a TaskCompletionSource. The SDK sends flow{drain=true} on receiver close to settle
 // remaining credit; SourceLinkEndpoint's built-in drain handling only runs after the
 // next GetMessageAsync completes, which never happens for a parked waiter, so the SDK
-// times out at 60s. We intercept drain at the link level and ack it immediately with
-// CompleteDrain, leaving the TCS waiter to be satisfied (and harmlessly dropped) by a
-// future Enqueue.
+// times out at 60s.
+//
+// AMQPNetLite's ListenerLink.CompleteDrain advances delivery-count and clears credit,
+// but emits the drain-ack flow with drain=false (it zeroes the local field before the
+// SendFlow call). The Service Bus SDK reads the drain flag strictly and ignores that
+// ack, so ReceiveMessageAsync hangs until its internal 60s operation timeout. We work
+// around it by letting CompleteDrain update link state, then reaching into the internal
+// SendFlow to emit a spec-compliant drain=true flow on top. Reflection here is the
+// pragmatic price for staying on the upstream NuGet package; the targeted members
+// (ListenerLink.deliveryCount field, Link.SendFlow(uint,uint,bool)) have been stable
+// for years and a missing-member break would surface immediately on first test run.
 sealed class DrainAwareSourceLinkEndpoint(IMessageSource source, ListenerLink link) : SourceLinkEndpoint(source, link)
 {
+    private static readonly FieldInfo DeliveryCountField = typeof(ListenerLink)
+        .GetField("deliveryCount", BindingFlags.NonPublic | BindingFlags.Instance)
+        ?? throw new InvalidOperationException("ListenerLink.deliveryCount field not found.");
+
+    private static readonly FieldInfo SequenceNumberInnerField = DeliveryCountField.FieldType
+        .GetField("sequenceNumber", BindingFlags.NonPublic | BindingFlags.Instance)
+        ?? throw new InvalidOperationException("SequenceNumber.sequenceNumber field not found.");
+
+    private static readonly MethodInfo SendFlowMethod = typeof(Link)
+        .GetMethod("SendFlow", BindingFlags.NonPublic | BindingFlags.Instance,
+            binder: null, types: [typeof(uint), typeof(uint), typeof(bool)], modifiers: null)
+        ?? throw new InvalidOperationException("Link.SendFlow(uint,uint,bool) not found.");
+
     public override void OnFlow(FlowContext flowContext)
     {
         if (flowContext.Link.IsDraining)
         {
             flowContext.Link.CompleteDrain();
+            SendDrainTrueAck(flowContext.Link);
             return;
         }
         base.OnFlow(flowContext);
+    }
+
+    private static void SendDrainTrueAck(ListenerLink link)
+    {
+        var seq = DeliveryCountField.GetValue(link)!;
+        var deliveryCount = (uint)(int)SequenceNumberInnerField.GetValue(seq)!;
+        SendFlowMethod.Invoke(link, [deliveryCount, 0u, true]);
     }
 }

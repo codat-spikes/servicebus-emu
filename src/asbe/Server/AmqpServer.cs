@@ -20,9 +20,15 @@ sealed class AmqpServer
 
     public bool DeleteQueue(string name)
     {
-        if (!_queues.DeleteQueue(name)) return false;
-        _host.UnregisterRequestProcessor(_queues.ManagementAddressFor(name));
-        return true;
+        // We deliberately don't call _host.UnregisterRequestProcessor here. AmqpNetLite's
+        // ContainerHost.RequestProcessor.Dispose takes its requestLinks lock and then
+        // synchronously closes each link, while the connection-close handler closes
+        // links first and only then fires OnLinkClosed which itself tries to take
+        // requestLinks. If a client disconnects around the same moment we delete the
+        // queue, the two threads deadlock on opposite lock orderings. Leaving the
+        // management endpoint registered is harmless (queue names are unique) and the
+        // memory cost is negligible for the lifetime of a server instance.
+        return _queues.DeleteQueue(name);
     }
 
     public void Start()
