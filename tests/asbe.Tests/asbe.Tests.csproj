@@ -12,11 +12,13 @@
   <ItemGroup>
     <PackageReference Include="xunit.v3" Version="2.0.3" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.7" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.7" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="appsettings.test.json" Condition="Exists('appsettings.test.json')" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\asbe\appsettings.json" Link="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

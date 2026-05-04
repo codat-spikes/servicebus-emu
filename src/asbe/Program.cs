@@ -1,6 +1,14 @@
 using Azure.Messaging.ServiceBus;
+using Microsoft.Extensions.Configuration;
 
-var server = new AmqpServer();
+var config = new ConfigurationBuilder()
+    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
+    .Build();
+
+var queues = config.GetSection("Queues").Get<Dictionary<string, QueueOptions>>()
+    ?? new Dictionary<string, QueueOptions>();
+
+var server = new AmqpServer(queues);
 Console.WriteLine("Starting server");
 server.Start();
 

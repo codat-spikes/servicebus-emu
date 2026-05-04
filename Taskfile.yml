@@ -6,6 +6,7 @@ vars:
   SB_RG: asbe-testing-rg
   SB_NAMESPACE: asbe-testing
   SB_QUEUE: test-queue
+  SB_QUEUE_FAST: test-queue-fast
   SB_LOCATION: uksouth
 
 tasks:
@@ -30,13 +31,36 @@ tasks:
       - dotnet run --project {{.TEST_PROJECT}}
 
   sb:up:
-    desc: Create Azure Service Bus (Basic) namespace + queue in the current subscription
+    desc: Create (idempotent) Azure Service Bus namespace + test queues, then print connection string
+    cmds:
+      - task: sb:ns:up
+      - task: sb:queues:up
+      - task: sb:print-conn
+
+  sb:ns:up:
+    desc: Idempotently create the resource group + Service Bus namespace
     cmds:
       - az group create -n {{.SB_RG}} -l {{.SB_LOCATION}} -o none
       - az servicebus namespace create -g {{.SB_RG}} -n {{.SB_NAMESPACE}} --sku Basic -l {{.SB_LOCATION}} -o none
-      - az servicebus queue create -g {{.SB_RG}} --namespace-name {{.SB_NAMESPACE}} -n {{.SB_QUEUE}} -o none
+
+  sb:queues:up:
+    desc: Idempotently create the test queues (matches the asbe appsettings.json config)
+    cmds:
+      - az servicebus queue create -g {{.SB_RG}} --namespace-name {{.SB_NAMESPACE}} -n {{.SB_QUEUE}} --lock-duration PT30S --max-delivery-count 10 -o none
+      - az servicebus queue create -g {{.SB_RG}} --namespace-name {{.SB_NAMESPACE}} -n {{.SB_QUEUE_FAST}} --lock-duration PT5S --max-delivery-count 3 -o none
+
+  sb:queues:reset:
+    desc: Delete + recreate the test queues to clear all state (preserves namespace)
+    cmds:
+      - az servicebus queue delete -g {{.SB_RG}} --namespace-name {{.SB_NAMESPACE}} -n {{.SB_QUEUE}} -o none
+      - az servicebus queue delete -g {{.SB_RG}} --namespace-name {{.SB_NAMESPACE}} -n {{.SB_QUEUE_FAST}} -o none
+      - task: sb:queues:up
+
+  sb:print-conn:
+    desc: Print the namespace connection string
+    cmds:
       - |
-        echo "Connection string (export as SERVICEBUS_CONNECTION_STRING to enable Azure tests):"
+        echo "Connection string (paste into tests/asbe.Tests/appsettings.test.json to enable Azure tests):"
         az servicebus namespace authorization-rule keys list \
           -g {{.SB_RG}} --namespace-name {{.SB_NAMESPACE}} \
           -n RootManageSharedAccessKey \
