@@ -2,3 +2,11 @@ sealed record QueueOptions(TimeSpan LockDuration, int MaxDeliveryCount, bool Req
 {
     public static readonly QueueOptions Default = new(TimeSpan.FromSeconds(30), 10);
 }
+
+// Per-subscription configuration: queue knobs (lock duration, delivery count, sessions)
+// plus an optional set of rules. A subscription with no rules is implicitly match-all,
+// matching Service Bus's `$Default` rule.
+sealed record SubscriptionOptions(QueueOptions Queue, IReadOnlyList<RuleFilter>? Rules = null)
+{
+    public static SubscriptionOptions Default { get; } = new(QueueOptions.Default);
+}

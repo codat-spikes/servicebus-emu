@@ -112,6 +112,73 @@ public sealed class TopicTests
         }
     }
 
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task CorrelationFilter_RoutesByCorrelationId(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestTopic.CreateAsync(transport,
+            [
+                ("sub-a", TestData.DefaultOptions, (RuleFilter?)new CorrelationRuleFilter(CorrelationId: "for-a")),
+                ("sub-b", TestData.DefaultOptions, (RuleFilter?)new CorrelationRuleFilter(CorrelationId: "for-b")),
+            ], ct);
+
+        await using var sender = fx.Client.CreateSender(fx.TopicName);
+        await sender.SendMessageAsync(new ServiceBusMessage("msg-a") { CorrelationId = "for-a" }, ct);
+        await sender.SendMessageAsync(new ServiceBusMessage("msg-b") { CorrelationId = "for-b" }, ct);
+        await sender.SendMessageAsync(new ServiceBusMessage("msg-other") { CorrelationId = "for-nobody" }, ct);
+
+        await using var ra = fx.Client.CreateReceiver(fx.TopicName, "sub-a");
+        var a = await ra.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(a);
+        Assert.Equal("msg-a", a!.Body.ToString());
+        await ra.CompleteMessageAsync(a, ct);
+        var aExtra = await ra.ReceiveMessageAsync(TimeSpan.FromSeconds(2), ct);
+        Assert.Null(aExtra);
+
+        await using var rb = fx.Client.CreateReceiver(fx.TopicName, "sub-b");
+        var b = await rb.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(b);
+        Assert.Equal("msg-b", b!.Body.ToString());
+        await rb.CompleteMessageAsync(b, ct);
+        var bExtra = await rb.ReceiveMessageAsync(TimeSpan.FromSeconds(2), ct);
+        Assert.Null(bExtra);
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task CorrelationFilter_MatchesOnApplicationProperty(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestTopic.CreateAsync(transport,
+            [
+                ("sub", TestData.DefaultOptions,
+                    (RuleFilter?)new CorrelationRuleFilter(
+                        Properties: new Dictionary<string, object> { ["region"] = "eu" })),
+            ], ct);
+
+        await using var sender = fx.Client.CreateSender(fx.TopicName);
+        var match = new ServiceBusMessage("eu-msg");
+        match.ApplicationProperties["region"] = "eu";
+        var miss = new ServiceBusMessage("us-msg");
+        miss.ApplicationProperties["region"] = "us";
+        var noProp = new ServiceBusMessage("no-prop");
+        await sender.SendMessageAsync(match, ct);
+        await sender.SendMessageAsync(miss, ct);
+        await sender.SendMessageAsync(noProp, ct);
+
+        await using var receiver = fx.Client.CreateReceiver(fx.TopicName, "sub");
+        var received = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(received);
+        Assert.Equal("eu-msg", received!.Body.ToString());
+        await receiver.CompleteMessageAsync(received, ct);
+
+        var extra = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2), ct);
+        Assert.Null(extra);
+    }
+
     [Fact(Timeout = 30_000)]
     [Trait("Category", "Edge")]
     public async Task Receiver_AttachToBareTopic_IsRejected()

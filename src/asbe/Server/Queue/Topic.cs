@@ -4,7 +4,7 @@ using Amqp.Types;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-sealed record TopicOptions(IReadOnlyDictionary<string, QueueOptions> Subscriptions);
+sealed record TopicOptions(IReadOnlyDictionary<string, SubscriptionOptions> Subscriptions);
 
 sealed class Topic
 {
@@ -15,6 +15,7 @@ sealed class Topic
     public IReadOnlyDictionary<string, InMemoryQueue> Subscriptions => _subscriptions;
 
     private readonly Dictionary<string, InMemoryQueue> _subscriptions;
+    private readonly Dictionary<string, IReadOnlyList<RuleFilter>> _subscriptionRules;
     private readonly ILogger<Topic> _logger;
     private readonly ScheduledStore _scheduled;
     private long _nextSequenceNumber;
@@ -25,8 +26,12 @@ sealed class Topic
         Name = name;
         _logger = loggerFactory.CreateLogger<Topic>();
         _subscriptions = new Dictionary<string, InMemoryQueue>(options.Subscriptions.Count, StringComparer.Ordinal);
+        _subscriptionRules = new Dictionary<string, IReadOnlyList<RuleFilter>>(options.Subscriptions.Count, StringComparer.Ordinal);
         foreach (var (subName, subOptions) in options.Subscriptions)
-            _subscriptions[subName] = new InMemoryQueue(subOptions, loggerFactory);
+        {
+            _subscriptions[subName] = new InMemoryQueue(subOptions.Queue, loggerFactory);
+            _subscriptionRules[subName] = subOptions.Rules is { Count: > 0 } ? subOptions.Rules : [RuleFilter.MatchAll];
+        }
         _scheduled = new ScheduledStore(AssignSequenceNumber, Enqueue, loggerFactory.CreateLogger<ScheduledStore>());
     }
 
@@ -60,9 +65,22 @@ sealed class Topic
         // subscription would share the same annotation map and the same Message instance,
         // so the second subscription's enqueue would reuse the first subscription's
         // sequence number and any later mutation (peek, lock state) would bleed across.
-        foreach (var subscription in _subscriptions.Values)
+        var delivered = 0;
+        foreach (var (subName, subscription) in _subscriptions)
+        {
+            if (!AnyRuleMatches(_subscriptionRules[subName], message)) continue;
             subscription.Enqueue(Clone(message));
-        _logger.LogTrace("Topic '{Topic}' fanned message to {Count} subscription(s)", Name, _subscriptions.Count);
+            delivered++;
+        }
+        _logger.LogTrace("Topic '{Topic}' fanned message to {Delivered}/{Total} subscription(s)",
+            Name, delivered, _subscriptions.Count);
+    }
+
+    private static bool AnyRuleMatches(IReadOnlyList<RuleFilter> rules, Message message)
+    {
+        for (int i = 0; i < rules.Count; i++)
+            if (rules[i].Matches(message)) return true;
+        return false;
     }
 
     private static Message Clone(Message message)

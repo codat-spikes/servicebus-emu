@@ -18,8 +18,11 @@ internal static class TestData
 internal sealed class TestQueue : IAsyncDisposable
 {
     public required ServiceBusClient Client { get; init; }
+    public required string ConnectionString { get; init; }
     public required string Name { get; init; }
     public required Func<ValueTask> Cleanup { private get; init; }
+
+    public ServiceBusClient NewClient() => new(ConnectionString);
 
     public static async Task<TestQueue> CreateAsync(Transport transport, QueueOptions options, CancellationToken ct)
     {
@@ -32,6 +35,7 @@ internal sealed class TestQueue : IAsyncDisposable
                 return new TestQueue
                 {
                     Client = new ServiceBusClient(AmqpServer.LocalConnectionString),
+                    ConnectionString = AmqpServer.LocalConnectionString,
                     Name = name,
                     Cleanup = () => { LocalServer.Server.DeleteQueue(name); return ValueTask.CompletedTask; },
                 };
@@ -58,6 +62,7 @@ internal sealed class TestQueue : IAsyncDisposable
                 return new TestQueue
                 {
                     Client = new ServiceBusClient(conn!),
+                    ConnectionString = conn!,
                     Name = name,
                     Cleanup = async () => { await admin.DeleteQueueAsync(name, CancellationToken.None); },
                 };
@@ -83,7 +88,10 @@ internal sealed class TestTopic : IAsyncDisposable
 
     public string SubscriptionPath(string subscription) => $"{TopicName}/Subscriptions/{subscription}";
 
-    public static async Task<TestTopic> CreateAsync(Transport transport, IReadOnlyList<(string Name, QueueOptions Options)> subscriptions, CancellationToken ct)
+    public static Task<TestTopic> CreateAsync(Transport transport, IReadOnlyList<(string Name, QueueOptions Options)> subscriptions, CancellationToken ct) =>
+        CreateAsync(transport, subscriptions.Select(s => (s.Name, s.Options, (RuleFilter?)null)).ToArray(), ct);
+
+    public static async Task<TestTopic> CreateAsync(Transport transport, IReadOnlyList<(string Name, QueueOptions Options, RuleFilter? Filter)> subscriptions, CancellationToken ct)
     {
         var topicName = $"topic-{Guid.NewGuid():N}";
         switch (transport)
@@ -91,7 +99,10 @@ internal sealed class TestTopic : IAsyncDisposable
             case Transport.Local:
                 LocalServer.EnsureStarted();
                 LocalServer.Server.CreateTopic(topicName, new TopicOptions(
-                    subscriptions.ToDictionary(s => s.Name, s => s.Options, StringComparer.Ordinal)));
+                    subscriptions.ToDictionary(
+                        s => s.Name,
+                        s => new SubscriptionOptions(s.Options, s.Filter is null ? null : [s.Filter]),
+                        StringComparer.Ordinal)));
                 return new TestTopic
                 {
                     Client = new ServiceBusClient(AmqpServer.LocalConnectionString),
@@ -107,14 +118,25 @@ internal sealed class TestTopic : IAsyncDisposable
                 try
                 {
                     await admin.CreateTopicAsync(new CreateTopicOptions(topicName), ct);
-                    foreach (var (name, options) in subscriptions)
+                    foreach (var (name, options, filter) in subscriptions)
                     {
-                        await admin.CreateSubscriptionAsync(new CreateSubscriptionOptions(topicName, name)
+                        var subOpts = new CreateSubscriptionOptions(topicName, name)
                         {
                             LockDuration = options.LockDuration,
                             MaxDeliveryCount = options.MaxDeliveryCount,
                             RequiresSession = options.RequiresSession,
-                        }, ct);
+                        };
+                        if (filter is null)
+                        {
+                            await admin.CreateSubscriptionAsync(subOpts, ct);
+                        }
+                        else
+                        {
+                            await admin.CreateSubscriptionAsync(
+                                subOpts,
+                                new CreateRuleOptions("$Default", ToAzureFilter(filter)),
+                                ct);
+                        }
                     }
                 }
                 catch (Exception ex) when (ex.Message.Contains("'Basic' tier", StringComparison.Ordinal))
@@ -144,6 +166,32 @@ internal sealed class TestTopic : IAsyncDisposable
     {
         await Client.DisposeAsync();
         await Cleanup();
+    }
+
+    private static Azure.Messaging.ServiceBus.Administration.RuleFilter ToAzureFilter(RuleFilter filter) => filter switch
+    {
+        TrueRuleFilter => new Azure.Messaging.ServiceBus.Administration.TrueRuleFilter(),
+        SqlRuleFilter sql => new Azure.Messaging.ServiceBus.Administration.SqlRuleFilter(sql.Expression),
+        CorrelationRuleFilter c => BuildAzureCorrelation(c),
+        _ => throw new NotSupportedException($"Cannot translate {filter.GetType().Name} to Azure SDK filter."),
+    };
+
+    private static Azure.Messaging.ServiceBus.Administration.CorrelationRuleFilter BuildAzureCorrelation(CorrelationRuleFilter c)
+    {
+        var f = new Azure.Messaging.ServiceBus.Administration.CorrelationRuleFilter
+        {
+            CorrelationId = c.CorrelationId,
+            MessageId = c.MessageId,
+            To = c.To,
+            ReplyTo = c.ReplyTo,
+            Subject = c.Label,
+            SessionId = c.SessionId,
+            ReplyToSessionId = c.ReplyToSessionId,
+            ContentType = c.ContentType,
+        };
+        if (c.Properties is not null)
+            foreach (var (k, v) in c.Properties) f.ApplicationProperties[k] = v;
+        return f;
     }
 }
 

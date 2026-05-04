@@ -36,8 +36,11 @@ sealed class QueueMessageSource(IQueueEndpoint endpoint, ILogger<QueueMessageSou
                     endpoint.Complete(delivery.Id);
                     break;
                 case Released:
-                    _logger.LogTrace("Release (abandon) delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
-                    endpoint.Abandon(delivery.Id);
+                    // AMQP `released` is implicit (e.g. AMQPNetLite emits it for unsettled
+                    // messages when the link closes). The Service Bus SDK uses `modified`
+                    // for AbandonMessageAsync, never `released` — so the broker holds the
+                    // lock until expiry rather than requeuing immediately. Match that.
+                    _logger.LogTrace("Released (lock held until expiry) delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
                     break;
                 case Modified modified when modified.UndeliverableHere:
                     _logger.LogTrace("Modified-undeliverable delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);

@@ -10,6 +10,9 @@ sealed class QueueLinkProcessor : ILinkProcessor
     private const uint MaxMessageSize = 256 * 1024;
     private static readonly Symbol SessionFilterName = "com.microsoft:session-filter";
     private static readonly Symbol LockedUntilUtc = "com.microsoft:locked-until-utc";
+    // SB-specific error condition the Azure SDK maps to ServiceBusFailureReason.SessionCannotBeLocked.
+    // Without this, the SDK falls back to GeneralError.
+    private static readonly Symbol SessionCannotBeLockedError = "com.microsoft:session-cannot-be-locked";
 
     private readonly QueueStore _queues;
     private readonly ILoggerFactory _loggerFactory;
@@ -107,7 +110,7 @@ sealed class QueueLinkProcessor : ILinkProcessor
 
         if (!session.TryAcquireLock(out var lockToken, out var lockedUntil))
         {
-            attachContext.Complete(new Error(ErrorCode.ResourceLocked) { Description = $"Session '{session.Id}' is already locked." });
+            attachContext.Complete(new Error(SessionCannotBeLockedError) { Description = $"Session '{session.Id}' is already locked." });
             return;
         }
 

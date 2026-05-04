@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Azure.Messaging.ServiceBus;
 using Xunit;
 
@@ -139,5 +140,45 @@ public sealed class TimingTests
         await using var receiver = fx.Client.CreateReceiver(fx.Name);
         var none = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(8), ct);
         Assert.Null(none);
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Timing")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task ReceiverDispose_DoesNotShortcutLock_NewReceiverWaitsForExpiry(Transport transport)
+    {
+        // Service Bus parity check: when a peek-lock receiver detaches without settling,
+        // the broker holds the lock for its full duration (at-least-once semantics — the
+        // broker can't tell whether the client got the message or just lost the network).
+        // A fresh receiver on the same queue should see the message redelivered only
+        // after the lock expires, not immediately on detach.
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.FastOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessageAsync(new ServiceBusMessage("hold-the-lock"), ct);
+
+        var first = fx.Client.CreateReceiver(fx.Name);
+        var msg = await first.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(msg);
+        Assert.Equal(1, msg!.DeliveryCount);
+        await first.DisposeAsync();
+
+        // Immediately try a fresh receiver — the lock is still held, so we shouldn't
+        // get anything within a 2s window (lock duration is 5s).
+        await using var second = fx.Client.CreateReceiver(fx.Name);
+        var sw = Stopwatch.StartNew();
+        var early = await second.ReceiveMessageAsync(TimeSpan.FromSeconds(2), ct);
+        Assert.Null(early);
+
+        // After the lock expires, the same fresh receiver picks it up with a bumped count.
+        var redelivered = await second.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        sw.Stop();
+        Assert.NotNull(redelivered);
+        Assert.Equal("hold-the-lock", redelivered!.Body.ToString());
+        Assert.Equal(2, redelivered.DeliveryCount);
+        Assert.True(sw.Elapsed >= TimeSpan.FromSeconds(3),
+            $"redelivery happened in {sw.Elapsed.TotalSeconds:F1}s — broker shortcut the lock on receiver detach");
+        await second.CompleteMessageAsync(redelivered, ct);
     }
 }

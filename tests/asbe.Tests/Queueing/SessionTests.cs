@@ -79,6 +79,57 @@ public sealed class SessionTests
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Edge")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task SessionLock_HeldByOneClient_BlocksAcquireFromAnotherClient(Transport transport)
+    {
+        // Multi-connection parity: two clients race for the same session id. The first
+        // wins; the second's accept must fail (Service Bus surfaces this as a
+        // ServiceBusException with Reason=SessionCannotBeLocked).
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.SessionOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessageAsync(new ServiceBusMessage("contended") { SessionId = "S" }, ct);
+
+        await using var clientA = fx.NewClient();
+        await using var clientB = fx.NewClient();
+
+        await using var holder = await clientA.AcceptSessionAsync(fx.Name, "S", cancellationToken: ct);
+        Assert.Equal("S", holder.SessionId);
+
+        var ex = await Assert.ThrowsAsync<ServiceBusException>(async () =>
+            await clientB.AcceptSessionAsync(fx.Name, "S", cancellationToken: ct));
+        Assert.Equal(ServiceBusFailureReason.SessionCannotBeLocked, ex.Reason);
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Edge")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task SessionLock_AfterFirstClientReleases_SecondClientCanAcquire(Transport transport)
+    {
+        // Multi-connection parity: once the first client detaches, the session lock is
+        // released and a second client on a different connection can pick it up.
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.SessionOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessageAsync(new ServiceBusMessage("hand-off") { SessionId = "S" }, ct);
+
+        await using var clientA = fx.NewClient();
+        var first = await clientA.AcceptSessionAsync(fx.Name, "S", cancellationToken: ct);
+        await first.DisposeAsync();
+
+        await using var clientB = fx.NewClient();
+        await using var second = await clientB.AcceptSessionAsync(fx.Name, "S", cancellationToken: ct);
+        Assert.Equal("S", second.SessionId);
+        var msg = await second.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(msg);
+        Assert.Equal("hand-off", msg!.Body.ToString());
+        await second.CompleteMessageAsync(msg, ct);
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Edge")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task NextAvailableSession_PicksAnUnlockedSession(Transport transport)
     {
         var ct = TestContext.Current.CancellationToken;
