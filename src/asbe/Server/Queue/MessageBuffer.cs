@@ -3,6 +3,8 @@ using System.Threading.Channels;
 using Amqp;
 using Amqp.Framing;
 using Amqp.Types;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 sealed class MessageBuffer
 {
@@ -17,15 +19,17 @@ sealed class MessageBuffer
     private readonly ConcurrentDictionary<long, Delivery> _inFlight = new();
     private readonly ConcurrentDictionary<Guid, Delivery> _byLockToken = new();
     private readonly Action<Delivery> _onLockExpired;
+    private readonly ILogger<MessageBuffer> _logger;
     private readonly object _trackedLock = new();
     private readonly SortedDictionary<long, Message> _tracked = new();
     private long _nextDeliveryId;
     private long _nextSequenceNumber;
 
-    public MessageBuffer(TimeSpan lockDuration, Action<Delivery> onLockExpired)
+    public MessageBuffer(TimeSpan lockDuration, Action<Delivery> onLockExpired, ILogger<MessageBuffer>? logger = null)
     {
         LockDuration = lockDuration;
         _onLockExpired = onLockExpired;
+        _logger = logger ?? NullLogger<MessageBuffer>.Instance;
     }
 
     public long Enqueue(Message message)
@@ -121,7 +125,17 @@ sealed class MessageBuffer
         if (Interlocked.CompareExchange(ref delivery.State, (int)DeliveryState.Expired, (int)DeliveryState.Pending) != (int)DeliveryState.Pending)
             return;
         Forget(delivery);
-        _onLockExpired(delivery);
+        _logger.LogTrace("Lock expired delivery={DeliveryId} seq={SequenceNumber} count={DeliveryCount}",
+            delivery.Id, delivery.SequenceNumber, delivery.DeliveryCount);
+        try
+        {
+            _onLockExpired(delivery);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Lock-expired callback failed for delivery={DeliveryId} seq={SequenceNumber}",
+                delivery.Id, delivery.SequenceNumber);
+        }
     }
 
     private void Forget(Delivery delivery)

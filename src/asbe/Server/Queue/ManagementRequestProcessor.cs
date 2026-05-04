@@ -2,10 +2,13 @@ using Amqp;
 using Amqp.Framing;
 using Amqp.Listener;
 using Amqp.Types;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Encoder = Amqp.Types.Encoder;
 
-sealed class ManagementRequestProcessor(InMemoryQueue queue) : IRequestProcessor
+sealed class ManagementRequestProcessor(InMemoryQueue queue, ILogger<ManagementRequestProcessor>? logger = null) : IRequestProcessor
 {
+    private readonly ILogger<ManagementRequestProcessor> _logger = logger ?? NullLogger<ManagementRequestProcessor>.Instance;
     private const string OperationKey = "operation";
     private const string StatusCodeKey = "statusCode";
     private const string StatusDescriptionKey = "statusDescription";
@@ -19,16 +22,25 @@ sealed class ManagementRequestProcessor(InMemoryQueue queue) : IRequestProcessor
     public void Process(RequestContext requestContext)
     {
         var op = requestContext.Message.ApplicationProperties?[OperationKey] as string;
-        Console.WriteLine($"Management request: operation={op}");
+        _logger.LogTrace("Management request operation={Operation}", op);
 
-        var response = op switch
+        Message response;
+        try
         {
-            RenewLockOperation => RenewLock(requestContext.Message),
-            PeekMessageOperation => Peek(requestContext.Message),
-            ScheduleMessageOperation => Schedule(requestContext.Message),
-            CancelScheduledMessageOperation => CancelScheduled(requestContext.Message),
-            _ => Status(501, $"Operation '{op}' is not supported."),
-        };
+            response = op switch
+            {
+                RenewLockOperation => RenewLock(requestContext.Message),
+                PeekMessageOperation => Peek(requestContext.Message),
+                ScheduleMessageOperation => Schedule(requestContext.Message),
+                CancelScheduledMessageOperation => CancelScheduled(requestContext.Message),
+                _ => Status(501, $"Operation '{op}' is not supported."),
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Management request failed operation={Operation}", op);
+            response = Status(500, ex.Message);
+        }
         requestContext.Complete(response);
     }
 

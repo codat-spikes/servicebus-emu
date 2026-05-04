@@ -1,19 +1,28 @@
 using Amqp.Listener;
 using Amqp.Sasl;
 using Amqp.Types;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 sealed class AmqpServer
 {
     public const string LocalConnectionString = "Endpoint=sb://localhost;SharedAccessKeyName=dev;SharedAccessKey=dev;UseDevelopmentEmulator=true;";
+    private const string ListenerAddress = "amqp://127.0.0.1:5672";
 
     private readonly QueueStore _queues;
-    private readonly ContainerHost _host = new(["amqp://127.0.0.1:5672"]);
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger<AmqpServer> _logger;
+    private readonly ContainerHost _host = new([ListenerAddress]);
 
-    public AmqpServer() : this(new Dictionary<string, QueueOptions>()) { }
+    public AmqpServer() : this(new Dictionary<string, QueueOptions>(), null) { }
 
-    public AmqpServer(IReadOnlyDictionary<string, QueueOptions> queues)
+    public AmqpServer(ILoggerFactory? loggerFactory) : this(new Dictionary<string, QueueOptions>(), loggerFactory) { }
+
+    public AmqpServer(IReadOnlyDictionary<string, QueueOptions> queues, ILoggerFactory? loggerFactory = null)
     {
-        _queues = new QueueStore(queues, RegisterManagement);
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _logger = _loggerFactory.CreateLogger<AmqpServer>();
+        _queues = new QueueStore(queues, RegisterManagement, _loggerFactory);
     }
 
     public void CreateQueue(string name, QueueOptions options) => _queues.CreateQueue(name, options);
@@ -36,11 +45,13 @@ sealed class AmqpServer
         var listener = _host.Listeners[0];
         listener.SASL.EnableMechanism((Symbol)"MSSBCBS", SaslProfile.Anonymous);
         listener.HandlerFactory = _ => new LockTokenHandler();
+
         _host.Open();
-        _host.RegisterRequestProcessor("$cbs", new CbsRequestProcessor());
-        _host.RegisterLinkProcessor(new QueueLinkProcessor(_queues));
+        _host.RegisterRequestProcessor("$cbs", new CbsRequestProcessor(_loggerFactory.CreateLogger<CbsRequestProcessor>()));
+        _host.RegisterLinkProcessor(new QueueLinkProcessor(_queues, _loggerFactory));
+        _logger.LogInformation("AMQP server listening on {Address}", ListenerAddress);
     }
 
     private void RegisterManagement(string name, InMemoryQueue queue) =>
-        _host.RegisterRequestProcessor(_queues.ManagementAddressFor(name), new ManagementRequestProcessor(queue));
+        _host.RegisterRequestProcessor(_queues.ManagementAddressFor(name), new ManagementRequestProcessor(queue, _loggerFactory.CreateLogger<ManagementRequestProcessor>()));
 }

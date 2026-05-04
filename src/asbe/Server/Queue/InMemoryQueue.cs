@@ -1,6 +1,8 @@
 using Amqp;
 using Amqp.Framing;
 using Amqp.Types;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 sealed class InMemoryQueue : IQueueEndpoint
 {
@@ -13,14 +15,17 @@ sealed class InMemoryQueue : IQueueEndpoint
     private readonly MessageBuffer _deadLetter;
     private readonly DeadLetterReceiver _deadLetterReceiver;
     private readonly ScheduledStore _scheduled;
+    private readonly ILogger<InMemoryQueue> _logger;
 
-    public InMemoryQueue(QueueOptions options)
+    public InMemoryQueue(QueueOptions options, ILoggerFactory? loggerFactory = null)
     {
+        loggerFactory ??= NullLoggerFactory.Instance;
+        _logger = loggerFactory.CreateLogger<InMemoryQueue>();
         Options = options;
-        Primary = new MessageBuffer(options.LockDuration, OnPrimaryLockExpired);
-        _deadLetter = new MessageBuffer(options.LockDuration, OnDeadLetterLockExpired);
+        Primary = new MessageBuffer(options.LockDuration, OnPrimaryLockExpired, loggerFactory.CreateLogger<MessageBuffer>());
+        _deadLetter = new MessageBuffer(options.LockDuration, OnDeadLetterLockExpired, loggerFactory.CreateLogger<MessageBuffer>());
         _deadLetterReceiver = new DeadLetterReceiver(_deadLetter);
-        _scheduled = new ScheduledStore(Primary);
+        _scheduled = new ScheduledStore(Primary, loggerFactory.CreateLogger<ScheduledStore>());
     }
 
     public long Schedule(Message message)
@@ -82,6 +87,8 @@ sealed class InMemoryQueue : IQueueEndpoint
         // Force the DLQ buffer to assign its own sequence number.
         message.MessageAnnotations?.Map.Remove(MessageBuffer.SequenceNumberAnnotation);
         _deadLetter.Enqueue(message);
+        _logger.LogInformation("Dead-lettered seq={SequenceNumber} reason={Reason} description={Description}",
+            delivery.SequenceNumber, info.Reason, info.Description);
     }
 }
 

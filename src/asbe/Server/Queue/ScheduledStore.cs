@@ -1,4 +1,6 @@
 using Amqp;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 // Holds messages scheduled for future enqueue. Service Bus assigns the sequence number
 // at schedule time and the same number is what callers cancel by — so we lean on the
@@ -7,15 +9,17 @@ using Amqp;
 sealed class ScheduledStore
 {
     private readonly MessageBuffer _primary;
+    private readonly ILogger<ScheduledStore> _logger;
     private readonly object _gate = new();
     private readonly Dictionary<long, ScheduledEntry> _bySeq = new();
     private readonly SortedDictionary<DateTime, List<long>> _byDue = new();
     private readonly Timer _timer;
 
-    public ScheduledStore(MessageBuffer primary)
+    public ScheduledStore(MessageBuffer primary, ILogger<ScheduledStore>? logger = null)
     {
         _primary = primary;
-        _timer = new Timer(_ => Flush(), null, Timeout.Infinite, Timeout.Infinite);
+        _logger = logger ?? NullLogger<ScheduledStore>.Instance;
+        _timer = new Timer(_ => SafeFlush(), null, Timeout.Infinite, Timeout.Infinite);
     }
 
     public long Schedule(Message message, DateTime enqueueAtUtc)
@@ -29,6 +33,7 @@ sealed class ScheduledStore
             list.Add(seq);
             ArmTimer();
         }
+        _logger.LogTrace("Scheduled seq={SequenceNumber} enqueueAt={EnqueueAt:O}", seq, enqueueAtUtc);
         return seq;
     }
 
@@ -43,8 +48,15 @@ sealed class ScheduledStore
                 if (list.Count == 0) _byDue.Remove(entry.EnqueueAt);
             }
             ArmTimer();
+            _logger.LogTrace("Cancelled scheduled seq={SequenceNumber}", sequenceNumber);
             return true;
         }
+    }
+
+    private void SafeFlush()
+    {
+        try { Flush(); }
+        catch (Exception ex) { _logger.LogError(ex, "Scheduled flush failed"); }
     }
 
     private void ArmTimer()
@@ -82,6 +94,8 @@ sealed class ScheduledStore
             ArmTimer();
         }
         foreach (var message in ready) _primary.Enqueue(message);
+        if (ready.Count > 0)
+            _logger.LogTrace("Flushed {Count} scheduled messages", ready.Count);
     }
 
     private readonly record struct ScheduledEntry(DateTime EnqueueAt, Message Message);
