@@ -36,6 +36,7 @@ sealed class QueueStore
     }
 
     public string QueueManagementAddressFor(string name) => NormalizeName(name) + ManagementSuffix;
+    public string DeadLetterManagementAddressFor(string name) => NormalizeName(name) + DeadLetterSuffix + ManagementSuffix;
     public string TopicManagementAddressFor(string name) => NormalizeName(name) + ManagementSuffix;
     public string SubscriptionManagementAddressFor(string topic, string subscription) =>
         NormalizeName(topic) + SubscriptionsSegment + subscription + ManagementSuffix;

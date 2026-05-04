@@ -12,7 +12,8 @@ sealed class TopicMessageSink(Topic topic, ILogger<TopicMessageSink>? logger = n
     {
         try
         {
-            topic.Enqueue(messageContext.Message);
+            foreach (var inner in BatchedMessage.Expand(messageContext.Message))
+                topic.Enqueue(inner);
             _logger.LogTrace("Topic enqueue link={Link} topic={Topic}", messageContext.Link.Name, topic.Name);
             messageContext.Complete();
         }

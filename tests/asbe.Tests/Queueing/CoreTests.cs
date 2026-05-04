@@ -156,6 +156,163 @@ public sealed class CoreTests
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task SendMessages_Batch_DeliversAllInOrder(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.DefaultOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        var bodies = Enumerable.Range(0, 10).Select(i => $"batch-{i}").ToArray();
+        await sender.SendMessagesAsync(bodies.Select(b => new ServiceBusMessage(b)), ct);
+
+        await using var receiver = fx.Client.CreateReceiver(fx.Name, new ServiceBusReceiverOptions
+        {
+            ReceiveMode = ServiceBusReceiveMode.ReceiveAndDelete,
+        });
+        var received = new List<string>();
+        for (var i = 0; i < bodies.Length; i++)
+        {
+            var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+            Assert.NotNull(msg);
+            received.Add(msg!.Body.ToString());
+        }
+        Assert.Equal(bodies, received);
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task SendMessages_BatchViaCreateMessageBatch_DeliversAll(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.DefaultOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        using var batch = await sender.CreateMessageBatchAsync(ct);
+        var bodies = Enumerable.Range(0, 5).Select(i => $"mb-{i}").ToArray();
+        foreach (var b in bodies)
+        {
+            Assert.True(batch.TryAddMessage(new ServiceBusMessage(b)));
+        }
+        await sender.SendMessagesAsync(batch, ct);
+
+        await using var receiver = fx.Client.CreateReceiver(fx.Name, new ServiceBusReceiverOptions
+        {
+            ReceiveMode = ServiceBusReceiveMode.ReceiveAndDelete,
+        });
+        var received = new List<string>();
+        for (var i = 0; i < bodies.Length; i++)
+        {
+            var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+            Assert.NotNull(msg);
+            received.Add(msg!.Body.ToString());
+        }
+        Assert.Equal(bodies, received);
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task Peek_AfterComplete_SkipsCompletedMessages(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.DefaultOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessagesAsync(new[]
+        {
+            new ServiceBusMessage("p-1"),
+            new ServiceBusMessage("p-2"),
+            new ServiceBusMessage("p-3"),
+        }, ct);
+
+        // Receive + complete the middle message.
+        await using var receiver = fx.Client.CreateReceiver(fx.Name);
+        var first = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        var second = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.Equal("p-1", first!.Body.ToString());
+        Assert.Equal("p-2", second!.Body.ToString());
+        await receiver.CompleteMessageAsync(second!, ct);
+        await receiver.AbandonMessageAsync(first!, cancellationToken: ct);
+
+        await using var peeker = fx.Client.CreateReceiver(fx.Name);
+        var peeked = await peeker.PeekMessagesAsync(maxMessages: 10, fromSequenceNumber: 0, cancellationToken: ct);
+        Assert.Equal(["p-1", "p-3"], peeked.Select(m => m.Body.ToString()));
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task Peek_FromSequenceNumberPastTail_ReturnsEmpty(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.DefaultOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessageAsync(new ServiceBusMessage("only-one"), ct);
+
+        await using var receiver = fx.Client.CreateReceiver(fx.Name);
+        var first = await receiver.PeekMessageAsync(fromSequenceNumber: 0, cancellationToken: ct);
+        Assert.NotNull(first);
+
+        var beyond = await receiver.PeekMessagesAsync(maxMessages: 10, fromSequenceNumber: first!.SequenceNumber + 1000, cancellationToken: ct);
+        Assert.Empty(beyond);
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task Peek_MaxMessages_RespectsLimit(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.DefaultOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessagesAsync(Enumerable.Range(0, 5).Select(i => new ServiceBusMessage($"m-{i}")), ct);
+
+        await using var receiver = fx.Client.CreateReceiver(fx.Name);
+        var peeked = await receiver.PeekMessagesAsync(maxMessages: 2, fromSequenceNumber: 0, cancellationToken: ct);
+        Assert.Equal(2, peeked.Count);
+        Assert.Equal(["m-0", "m-1"], peeked.Select(m => m.Body.ToString()));
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task Peek_OnDeadLetterSubqueue_ReturnsDeadLetteredMessages(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.DefaultOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessagesAsync(new[]
+        {
+            new ServiceBusMessage("dlq-a"),
+            new ServiceBusMessage("dlq-b"),
+        }, ct);
+
+        await using var receiver = fx.Client.CreateReceiver(fx.Name);
+        for (var i = 0; i < 2; i++)
+        {
+            var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+            Assert.NotNull(msg);
+            await receiver.DeadLetterMessageAsync(msg!, cancellationToken: ct);
+        }
+
+        await using var dlqPeeker = fx.Client.CreateReceiver(fx.Name, new ServiceBusReceiverOptions
+        {
+            SubQueue = SubQueue.DeadLetter,
+        });
+        var peeked = await dlqPeeker.PeekMessagesAsync(maxMessages: 10, fromSequenceNumber: 0, cancellationToken: ct);
+        Assert.Equal(2, peeked.Count);
+        Assert.Equal(new HashSet<string> { "dlq-a", "dlq-b" }, peeked.Select(m => m.Body.ToString()).ToHashSet());
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task PeekLock_DeadLetter_RemovesFromMainQueue(Transport transport)
     {
         var ct = TestContext.Current.CancellationToken;

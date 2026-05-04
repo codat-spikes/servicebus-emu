@@ -6,9 +6,28 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Encoder = Amqp.Types.Encoder;
 
-sealed class ManagementRequestProcessor(InMemoryQueue queue, ILogger<ManagementRequestProcessor>? logger = null) : IRequestProcessor
+sealed class ManagementRequestProcessor : IRequestProcessor
 {
-    private readonly ILogger<ManagementRequestProcessor> _logger = logger ?? NullLogger<ManagementRequestProcessor>.Instance;
+    // Peek and renew-lock work on any IQueueEndpoint (incl. the DLQ buffer). Schedule
+    // and session ops only make sense on the main queue, so they require the richer
+    // InMemoryQueue surface; on a DLQ-bound processor those operations return 501.
+    private readonly IQueueEndpoint _endpoint;
+    private readonly InMemoryQueue? _queue;
+    private readonly ILogger<ManagementRequestProcessor> _logger;
+
+    public ManagementRequestProcessor(InMemoryQueue queue, ILogger<ManagementRequestProcessor>? logger = null)
+        : this(queue, queue, logger) { }
+
+    public ManagementRequestProcessor(IQueueEndpoint endpoint, ILogger<ManagementRequestProcessor>? logger = null)
+        : this(endpoint, queue: null, logger) { }
+
+    private ManagementRequestProcessor(IQueueEndpoint endpoint, InMemoryQueue? queue, ILogger<ManagementRequestProcessor>? logger)
+    {
+        _endpoint = endpoint;
+        _queue = queue;
+        _logger = logger ?? NullLogger<ManagementRequestProcessor>.Instance;
+    }
+
     private const string OperationKey = "operation";
     private const string StatusCodeKey = "statusCode";
     private const string StatusDescriptionKey = "statusDescription";
@@ -60,7 +79,7 @@ sealed class ManagementRequestProcessor(InMemoryQueue queue, ILogger<ManagementR
         {
             if (tokens.GetValue(i) is not Guid token)
                 return Status(400, "Lock token is not a uuid.");
-            if (!queue.TryRenewLock(token, out var expiresAt))
+            if (!_endpoint.TryRenewLock(token, out var expiresAt))
                 return Status(410, $"Lock token {token} is no longer held.");
             expirations[i] = expiresAt;
         }
@@ -76,7 +95,7 @@ sealed class ManagementRequestProcessor(InMemoryQueue queue, ILogger<ManagementR
             return Status(400, "Missing from-sequence-number.");
         var maxCount = body["message-count"] is int n ? n : 1;
 
-        var messages = queue.Peek(fromSeq, maxCount);
+        var messages = _endpoint.Peek(fromSeq, maxCount);
         if (messages.Count == 0)
             return Status(204, "No messages available.");
 
@@ -102,6 +121,7 @@ sealed class ManagementRequestProcessor(InMemoryQueue queue, ILogger<ManagementR
 
     private Message Schedule(Message request)
     {
+        if (_queue is null) return Status(501, "Schedule is not supported on this entity.");
         if (request.Body is not Map body) return Status(400, "Missing schedule body.");
         if (body["messages"] is not System.Collections.IList entries || entries.Count == 0)
             return Status(400, "Missing messages.");
@@ -120,7 +140,7 @@ sealed class ManagementRequestProcessor(InMemoryQueue queue, ILogger<ManagementR
             if (bytes is null) return Status(400, "Schedule entry message must be binary.");
 
             var decoded = Message.Decode(new ByteBuffer(bytes, 0, bytes.Length, bytes.Length));
-            sequenceNumbers[i] = queue.Schedule(decoded);
+            sequenceNumbers[i] = _queue.Schedule(decoded);
         }
 
         return Ok(new Map { ["sequence-numbers"] = sequenceNumbers });
@@ -128,20 +148,22 @@ sealed class ManagementRequestProcessor(InMemoryQueue queue, ILogger<ManagementR
 
     private Message CancelScheduled(Message request)
     {
+        if (_queue is null) return Status(501, "CancelScheduled is not supported on this entity.");
         if (request.Body is not Map body) return Status(400, "Missing cancel body.");
         if (body["sequence-numbers"] is not Array tokens) return Status(400, "Missing sequence-numbers.");
         for (int i = 0; i < tokens.Length; i++)
         {
-            if (tokens.GetValue(i) is long seq) queue.CancelScheduled(seq);
+            if (tokens.GetValue(i) is long seq) _queue.CancelScheduled(seq);
         }
         return Status(200, "OK");
     }
 
     private Message RenewSessionLock(Message request)
     {
+        if (_queue is null) return Status(501, "Sessions are not supported on this entity.");
         if (request.Body is not Map body) return Status(400, "Missing body.");
         if (body["session-id"] is not string sessionId) return Status(400, "Missing session-id.");
-        var session = queue.Sessions.Find(sessionId);
+        var session = _queue.Sessions.Find(sessionId);
         if (session is null || !session.TryRenewLock(out var expiresAt))
             return Status(410, $"Session '{sessionId}' lock is not held.");
         return Ok(new Map { ["expiration"] = expiresAt });
@@ -149,18 +171,20 @@ sealed class ManagementRequestProcessor(InMemoryQueue queue, ILogger<ManagementR
 
     private Message GetSessionState(Message request)
     {
+        if (_queue is null) return Status(501, "Sessions are not supported on this entity.");
         if (request.Body is not Map body) return Status(400, "Missing body.");
         if (body["session-id"] is not string sessionId) return Status(400, "Missing session-id.");
-        var session = queue.Sessions.Find(sessionId);
+        var session = _queue.Sessions.Find(sessionId);
         var state = session?.State ?? [];
         return Ok(new Map { ["session-state"] = state.Length > 0 ? state : null });
     }
 
     private Message SetSessionState(Message request)
     {
+        if (_queue is null) return Status(501, "Sessions are not supported on this entity.");
         if (request.Body is not Map body) return Status(400, "Missing body.");
         if (body["session-id"] is not string sessionId) return Status(400, "Missing session-id.");
-        var session = queue.Sessions.GetOrCreate(sessionId);
+        var session = _queue.Sessions.GetOrCreate(sessionId);
         session.State = body["session-state"] switch
         {
             null => [],

@@ -66,6 +66,9 @@ sealed class AmqpServer
         _logger.LogInformation("AMQP server listening on {Address}", ListenerAddress);
     }
 
-    private void RegisterManagement(string name, InMemoryQueue queue) =>
+    private void RegisterManagement(string name, InMemoryQueue queue)
+    {
         _host.RegisterRequestProcessor(_queues.QueueManagementAddressFor(name), new ManagementRequestProcessor(queue, _loggerFactory.CreateLogger<ManagementRequestProcessor>()));
+        _host.RegisterRequestProcessor(_queues.DeadLetterManagementAddressFor(name), new ManagementRequestProcessor(queue.DeadLetter, _loggerFactory.CreateLogger<ManagementRequestProcessor>()));
+    }
 }

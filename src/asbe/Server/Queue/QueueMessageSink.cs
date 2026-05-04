@@ -12,7 +12,8 @@ sealed class QueueMessageSink(IQueueEndpoint endpoint, ILogger<QueueMessageSink>
     {
         try
         {
-            endpoint.Enqueue(messageContext.Message);
+            foreach (var inner in BatchedMessage.Expand(messageContext.Message))
+                endpoint.Enqueue(inner);
             _logger.LogTrace("Enqueue link={Link}", messageContext.Link.Name);
             messageContext.Complete();
         }
