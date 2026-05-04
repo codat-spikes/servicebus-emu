@@ -11,13 +11,15 @@ sealed record TrueRuleFilter : RuleFilter
     public override bool Matches(Message message) => true;
 }
 
-// Placeholder. SQL filter parsing is a real chunk of work (expression grammar +
-// evaluator); ship correlation filters first, wire SQL up later.
 sealed record SqlRuleFilter(string Expression) : RuleFilter
 {
-    public override bool Matches(Message message) =>
-        throw new NotSupportedException(
-            "SQL rule filters are not yet implemented. Use a CorrelationRuleFilter or TrueRuleFilter for now.");
+    private SqlExpr? _parsed;
+
+    public override bool Matches(Message message)
+    {
+        var expr = _parsed ??= SqlParser.Parse(Expression);
+        return expr.Eval(message) is true;
+    }
 }
 
 sealed record CorrelationRuleFilter(

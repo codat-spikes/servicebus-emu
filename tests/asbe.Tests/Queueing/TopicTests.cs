@@ -179,6 +179,41 @@ public sealed class TopicTests
         Assert.Null(extra);
     }
 
+    // Smoke test that SQL rule filters are wired through Topic.Enqueue. The full
+    // grammar is covered by SqlFilterTests; this just proves end-to-end dispatch
+    // (and parity with Azure when the connection string is configured).
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task SqlFilter_RoutesByPredicate(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestTopic.CreateAsync(transport,
+            [
+                ("sub", TestData.DefaultOptions,
+                    (RuleFilter?)new SqlRuleFilter("region IN ('eu', 'uk') AND tier = 'gold'")),
+            ], ct);
+
+        await using var sender = fx.Client.CreateSender(fx.TopicName);
+        var match = new ServiceBusMessage("match");
+        match.ApplicationProperties["region"] = "uk";
+        match.ApplicationProperties["tier"] = "gold";
+        var miss = new ServiceBusMessage("miss");
+        miss.ApplicationProperties["region"] = "us";
+        miss.ApplicationProperties["tier"] = "gold";
+        await sender.SendMessageAsync(match, ct);
+        await sender.SendMessageAsync(miss, ct);
+
+        await using var receiver = fx.Client.CreateReceiver(fx.TopicName, "sub");
+        var received = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(received);
+        Assert.Equal("match", received!.Body.ToString());
+        await receiver.CompleteMessageAsync(received, ct);
+
+        var extra = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2), ct);
+        Assert.Null(extra);
+    }
+
     [Fact(Timeout = 30_000)]
     [Trait("Category", "Edge")]
     public async Task Receiver_AttachToBareTopic_IsRejected()
