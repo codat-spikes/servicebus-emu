@@ -1,6 +1,7 @@
 using Azure.Messaging.ServiceBus;
 using Azure.Messaging.ServiceBus.Administration;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 public enum Transport { Local, Azure }
@@ -214,7 +215,17 @@ internal static class LocalServer
         lock (_gate)
         {
             if (_server is not null) return;
-            _server = new AmqpServer();
+            // Set ASBE_TEST_LOG=1 to dump server + AMQP frame traces to the test console.
+            var logEnabled = Environment.GetEnvironmentVariable("ASBE_TEST_LOG") == "1";
+            ILoggerFactory? lf = logEnabled
+                ? LoggerFactory.Create(b => b.AddSimpleConsole(o => o.SingleLine = true).SetMinimumLevel(LogLevel.Trace))
+                : null;
+            if (logEnabled)
+            {
+                Amqp.Trace.TraceLevel = Amqp.TraceLevel.Frame | Amqp.TraceLevel.Verbose;
+                Amqp.Trace.TraceListener = (l, f, a) => Console.WriteLine("[amqp] " + string.Format(f, a));
+            }
+            _server = new AmqpServer(lf);
             _server.Start();
         }
     }

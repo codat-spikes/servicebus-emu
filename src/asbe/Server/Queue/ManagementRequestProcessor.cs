@@ -13,18 +13,23 @@ sealed class ManagementRequestProcessor : IRequestProcessor
     // InMemoryQueue surface; on a DLQ-bound processor those operations return 501.
     private readonly IQueueEndpoint _endpoint;
     private readonly InMemoryQueue? _queue;
+    private readonly SubscriptionRules? _rules;
     private readonly ILogger<ManagementRequestProcessor> _logger;
 
     public ManagementRequestProcessor(InMemoryQueue queue, ILogger<ManagementRequestProcessor>? logger = null)
-        : this(queue, queue, logger) { }
+        : this(queue, queue, rules: null, logger) { }
 
     public ManagementRequestProcessor(IQueueEndpoint endpoint, ILogger<ManagementRequestProcessor>? logger = null)
-        : this(endpoint, queue: null, logger) { }
+        : this(endpoint, queue: null, rules: null, logger) { }
 
-    private ManagementRequestProcessor(IQueueEndpoint endpoint, InMemoryQueue? queue, ILogger<ManagementRequestProcessor>? logger)
+    public ManagementRequestProcessor(InMemoryQueue subscription, SubscriptionRules rules, ILogger<ManagementRequestProcessor>? logger = null)
+        : this(subscription, subscription, rules, logger) { }
+
+    private ManagementRequestProcessor(IQueueEndpoint endpoint, InMemoryQueue? queue, SubscriptionRules? rules, ILogger<ManagementRequestProcessor>? logger)
     {
         _endpoint = endpoint;
         _queue = queue;
+        _rules = rules;
         _logger = logger ?? NullLogger<ManagementRequestProcessor>.Instance;
     }
 
@@ -38,6 +43,9 @@ sealed class ManagementRequestProcessor : IRequestProcessor
     private const string RenewSessionLockOperation = "com.microsoft:renew-session-lock";
     private const string GetSessionStateOperation = "com.microsoft:get-session-state";
     private const string SetSessionStateOperation = "com.microsoft:set-session-state";
+    private const string AddRuleOperation = "com.microsoft:add-rule";
+    private const string RemoveRuleOperation = "com.microsoft:remove-rule";
+    private const string EnumerateRulesOperation = "com.microsoft:enumerate-rules";
 
     public int Credit => 100;
 
@@ -58,6 +66,9 @@ sealed class ManagementRequestProcessor : IRequestProcessor
                 RenewSessionLockOperation => RenewSessionLock(requestContext.Message),
                 GetSessionStateOperation => GetSessionState(requestContext.Message),
                 SetSessionStateOperation => SetSessionState(requestContext.Message),
+                AddRuleOperation => AddRule(requestContext.Message),
+                RemoveRuleOperation => RemoveRule(requestContext.Message),
+                EnumerateRulesOperation => EnumerateRules(requestContext.Message),
                 _ => Status(501, $"Operation '{op}' is not supported."),
             };
         }
@@ -193,6 +204,52 @@ sealed class ManagementRequestProcessor : IRequestProcessor
             _ => session.State,
         };
         return Status(200, "OK");
+    }
+
+    private Message AddRule(Message request)
+    {
+        if (_rules is null) return Status(501, "Rule management is not supported on this entity.");
+        if (request.Body is not Map body) return Status(400, "Missing add-rule body.");
+        if (body["rule-name"] is not string ruleName || string.IsNullOrEmpty(ruleName))
+            return Status(400, "Missing rule-name.");
+        if (body["rule-description"] is not Map ruleDescription)
+            return Status(400, "Missing rule-description.");
+        var filter = RuleCodec.DecodeFilter(ruleDescription);
+        if (filter is null) return Status(400, "Rule must specify a sql-filter or correlation-filter.");
+
+        return _rules.Add(ruleName, filter) switch
+        {
+            SubscriptionRules.AddResult.Added => Status(200, "OK"),
+            SubscriptionRules.AddResult.Conflict => Status(409, $"Rule '{ruleName}' already exists."),
+            _ => Status(500, "Unknown add-rule result."),
+        };
+    }
+
+    private Message RemoveRule(Message request)
+    {
+        if (_rules is null) return Status(501, "Rule management is not supported on this entity.");
+        if (request.Body is not Map body) return Status(400, "Missing remove-rule body.");
+        if (body["rule-name"] is not string ruleName || string.IsNullOrEmpty(ruleName))
+            return Status(400, "Missing rule-name.");
+        return _rules.Remove(ruleName)
+            ? Status(200, "OK")
+            : Status(404, $"Rule '{ruleName}' does not exist.");
+    }
+
+    private Message EnumerateRules(Message request)
+    {
+        if (_rules is null) return Status(501, "Rule management is not supported on this entity.");
+        var body = request.Body as Map;
+        var skip = body?["skip"] is int s ? s : 0;
+        var top = body?["top"] is int t ? t : 100;
+
+        var snapshot = _rules.Snapshot();
+        var entries = new List();
+        var end = Math.Min(snapshot.Count, skip + top);
+        for (int i = Math.Max(0, skip); i < end; i++) entries.Add(RuleCodec.EncodeRuleEntry(snapshot[i]));
+
+        if (entries.Count == 0) return Status(204, "No rules.");
+        return Ok(new Map { ["rules"] = entries });
     }
 
     private static Message Status(int code, string description) =>

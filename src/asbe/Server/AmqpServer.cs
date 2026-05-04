@@ -45,7 +45,7 @@ sealed class AmqpServer : IAsyncDisposable
         foreach (var (subName, subQueue) in topic.Subscriptions)
         {
             var address = _queues.SubscriptionManagementAddressFor(name, subName);
-            _host.RegisterRequestProcessor(address, new ManagementRequestProcessor(subQueue, _loggerFactory.CreateLogger<ManagementRequestProcessor>()));
+            _host.RegisterRequestProcessor(address, new ManagementRequestProcessor(subQueue, topic.Rules[subName], _loggerFactory.CreateLogger<ManagementRequestProcessor>()));
         }
     }
 

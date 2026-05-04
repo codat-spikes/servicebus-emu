@@ -13,9 +13,10 @@ sealed class Topic : IDisposable
 
     public string Name { get; }
     public IReadOnlyDictionary<string, InMemoryQueue> Subscriptions => _subscriptions;
+    public IReadOnlyDictionary<string, SubscriptionRules> Rules => _subscriptionRules;
 
     private readonly Dictionary<string, InMemoryQueue> _subscriptions;
-    private readonly Dictionary<string, IReadOnlyList<RuleFilter>> _subscriptionRules;
+    private readonly Dictionary<string, SubscriptionRules> _subscriptionRules;
     private readonly ILogger<Topic> _logger;
     private readonly ScheduledStore _scheduled;
     private long _nextSequenceNumber;
@@ -26,11 +27,11 @@ sealed class Topic : IDisposable
         Name = name;
         _logger = loggerFactory.CreateLogger<Topic>();
         _subscriptions = new Dictionary<string, InMemoryQueue>(options.Subscriptions.Count, StringComparer.Ordinal);
-        _subscriptionRules = new Dictionary<string, IReadOnlyList<RuleFilter>>(options.Subscriptions.Count, StringComparer.Ordinal);
+        _subscriptionRules = new Dictionary<string, SubscriptionRules>(options.Subscriptions.Count, StringComparer.Ordinal);
         foreach (var (subName, subOptions) in options.Subscriptions)
         {
             _subscriptions[subName] = new InMemoryQueue(subOptions.Queue, loggerFactory);
-            _subscriptionRules[subName] = subOptions.Rules is { Count: > 0 } ? subOptions.Rules : [RuleFilter.MatchAll];
+            _subscriptionRules[subName] = new SubscriptionRules(subOptions.Rules);
         }
         _scheduled = new ScheduledStore(AssignSequenceNumber, Enqueue, loggerFactory.CreateLogger<ScheduledStore>());
     }
@@ -68,19 +69,12 @@ sealed class Topic : IDisposable
         var delivered = 0;
         foreach (var (subName, subscription) in _subscriptions)
         {
-            if (!AnyRuleMatches(_subscriptionRules[subName], message)) continue;
+            if (!_subscriptionRules[subName].Matches(message)) continue;
             subscription.Enqueue(Clone(message));
             delivered++;
         }
         _logger.LogTrace("Topic '{Topic}' fanned message to {Delivered}/{Total} subscription(s)",
             Name, delivered, _subscriptions.Count);
-    }
-
-    private static bool AnyRuleMatches(IReadOnlyList<RuleFilter> rules, Message message)
-    {
-        for (int i = 0; i < rules.Count; i++)
-            if (rules[i].Matches(message)) return true;
-        return false;
     }
 
     public void Dispose()

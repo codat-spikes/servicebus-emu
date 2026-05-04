@@ -11,6 +11,11 @@ sealed record TrueRuleFilter : RuleFilter
     public override bool Matches(Message message) => true;
 }
 
+sealed record FalseRuleFilter : RuleFilter
+{
+    public override bool Matches(Message message) => false;
+}
+
 sealed record SqlRuleFilter(string Expression) : RuleFilter
 {
     private SqlExpr? _parsed;
