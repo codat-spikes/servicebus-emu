@@ -22,10 +22,20 @@
 
 - No auth check beyond accepting the CBS `put-token` shape.
 - SQL filter arithmetic (`+`, `-`, `*`, `/`, `%`) is not implemented. The grammar covers the operators that show up in real subscription rules; arithmetic can be added if a use case appears.
-- Session parity tests against Azure require a Standard-tier (or higher) namespace; the default `task sb:up` provisions Basic, so `SessionTests` skip the Azure transport unless the namespace is upgraded.
-- Topic parity tests against Azure also require Standard-tier; `TopicTests` skip the Azure transport on Basic namespaces.
+- `DeleteQueue` removes the queue from `QueueStore` but intentionally does not unregister the per-queue `$management` request processor on `ContainerHost` — that path deadlocks against AMQPNetLite's link-close handler when a client disconnect races teardown. Test queue names are unique GUIDs so re-registration can't collide; the leak is one dictionary slot per delete for the lifetime of the server. See `docs/DELETE_QUEUE_DEADLOCK.md` for the full thread trace.
+- Subscription rules are fixed at `CreateTopic` time. Runtime rule management via the admin client (`AddRuleAsync` / `RemoveRuleAsync` / `GetRulesAsync` over `topic/Subscriptions/sub/$management`) isn't wired up.
+- No `TimeToLive` enforcement. Messages with an expiry don't auto-DLQ with `TTLExpiredException`.
+- No duplicate detection. `RequiresDuplicateDetection` + `MessageId`-based de-dup window isn't exposed on `QueueOptions`.
+- No auto-forwarding (`ForwardTo` / `ForwardDeadLetteredMessagesTo`).
+- No topic-root `$management` link — only per-subscription. Cross-subscription peek isn't supported.
+- Azure parity for sessions and topics requires a Standard-tier namespace. The default `task sb:up` provisions Basic; run `task sb:up:standard` instead to enable `SessionTests` and `TopicTests` against the real namespace (~$10/mo base — tear down with `task sb:down` when finished).
 
 ## Next steps (rough priority order)
 
-1. **Cross-entity (send-via) transactions.** Single-entity txns are in; `via-partition-key` routing for `ServiceBusClient.CreateTransactionalSender` against a different "via" entity isn't.
-Deferred: server shutdown / `DisposeAsync`. No consumer needs it (the test harness keeps `LocalServer` as a singleton on purpose), and AMQPNetLite's `ContainerHost` close path has lock-ordering hazards (see the `DeleteQueue` deadlock comment in `AmqpServer.cs`). Revisit when a real consumer wants to start/stop the server in-process.
+1. **Server shutdown / `DisposeAsync`.** No consumer needs it yet (the test harness holds `LocalServer` as a process-singleton on purpose), but it's the next-most-likely thing a real consumer will want. Has to be done carefully: AMQPNetLite's `ContainerHost` close path has the same lock-ordering hazard that bit `DeleteQueue` (see `docs/DELETE_QUEUE_DEADLOCK.md`).
+2. **Runtime rule management.** `AddRuleAsync` / `RemoveRuleAsync` / `GetRulesAsync` over the subscription's `$management` link. Topic + subscription state would need to become mutable; today it's frozen at `CreateTopic`.
+3. **Cross-entity (send-via) transactions.** Single-entity txns are in; `via-partition-key` routing for `ServiceBusClient.CreateTransactionalSender` against a different "via" entity isn't.
+4. **Message TTL.** Honour `TimeToLive` (and queue/topic-level defaults) — expired messages should DLQ with `DeadLetterReason = "TTLExpiredException"`.
+5. **Duplicate detection.** Add `RequiresDuplicateDetection` + `DuplicateDetectionHistoryTimeWindow` to `QueueOptions` and de-dup by `MessageId` within the window.
+6. **Auto-forwarding.** `ForwardTo` and `ForwardDeadLetteredMessagesTo` between queues/subscriptions.
+7. **SQL filter arithmetic.** Only if a real subscription rule needs it.
