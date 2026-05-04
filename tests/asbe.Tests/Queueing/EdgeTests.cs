@@ -1,13 +1,16 @@
 using Azure.Messaging.ServiceBus;
 using Xunit;
 
-// Regression guard for the AmqpServer.DeleteQueue / connection-close deadlock.
-// Before the fix, one iteration of `schedule + cancel + drain receive + DeleteQueue`
-// reliably hung on the synchronous UnregisterRequestProcessor call. See
-// docs/DELETE_QUEUE_DEADLOCK.md for the full story.
-public sealed class DeleteQueueDeadlockTests
+namespace Queueing;
+
+public sealed class EdgeTests
 {
+    // Regression guard for the AmqpServer.DeleteQueue / connection-close deadlock.
+    // Before the fix, one iteration of `schedule + cancel + drain receive + DeleteQueue`
+    // reliably hung on the synchronous UnregisterRequestProcessor call. See
+    // docs/DELETE_QUEUE_DEADLOCK.md for the full story.
     [Fact(Timeout = 30_000)]
+    [Trait("Category", "Edge")]
     public async Task ScheduleCancelDrainDelete_DoesNotDeadlock()
     {
         var ct = TestContext.Current.CancellationToken;
