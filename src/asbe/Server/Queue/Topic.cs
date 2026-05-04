@@ -4,7 +4,10 @@ using Amqp.Types;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-sealed record TopicOptions(IReadOnlyDictionary<string, SubscriptionOptions> Subscriptions);
+sealed record TopicOptions(
+    IReadOnlyDictionary<string, SubscriptionOptions> Subscriptions,
+    bool RequiresDuplicateDetection = false,
+    TimeSpan? DuplicateDetectionHistoryTimeWindow = null);
 
 sealed class Topic : IDisposable
 {
@@ -19,6 +22,7 @@ sealed class Topic : IDisposable
     private readonly Dictionary<string, SubscriptionRules> _subscriptionRules;
     private readonly ILogger<Topic> _logger;
     private readonly ScheduledStore _scheduled;
+    private readonly DuplicateDetectionWindow? _dedup;
     private long _nextSequenceNumber;
 
     public Topic(string name, TopicOptions options, ILoggerFactory? loggerFactory = null)
@@ -34,6 +38,9 @@ sealed class Topic : IDisposable
             _subscriptionRules[subName] = new SubscriptionRules(subOptions.Rules);
         }
         _scheduled = new ScheduledStore(AssignSequenceNumber, Enqueue, loggerFactory.CreateLogger<ScheduledStore>());
+        _dedup = options.RequiresDuplicateDetection
+            ? new DuplicateDetectionWindow(options.DuplicateDetectionHistoryTimeWindow ?? TimeSpan.FromMinutes(1))
+            : null;
     }
 
     public long Schedule(Message message)
@@ -61,6 +68,18 @@ sealed class Topic : IDisposable
 
     public void Enqueue(Message message)
     {
+        // Topic-level dedup runs once at the ingress, before fan-out — Azure mirrors
+        // this (dedup is a topic property, not a subscription property). Subscriptions
+        // see at most one copy of any duplicate within the window.
+        if (_dedup is not null && message.Properties?.MessageId is string id && id.Length > 0)
+        {
+            if (!_dedup.TryAdd(id))
+            {
+                _logger.LogTrace("Topic '{Topic}' dropped duplicate enqueue messageId={MessageId}", Name, id);
+                return;
+            }
+        }
+
         // Each subscription's MessageBuffer stamps a sequence-number annotation onto the
         // message reference and stores the reference itself. Without a deep clone, every
         // subscription would share the same annotation map and the same Message instance,

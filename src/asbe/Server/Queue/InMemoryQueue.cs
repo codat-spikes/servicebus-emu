@@ -22,6 +22,7 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
     private readonly DeadLetterReceiver _deadLetterReceiver;
     private readonly ScheduledStore _scheduled;
     private readonly ExpiryStore _expiry;
+    private readonly DuplicateDetectionWindow? _dedup;
     // Per-sequence reverse index: where the message lives so the expiry callback can
     // find the right MessageBuffer (primary or a session sub-buffer) to evict from.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, MessageBuffer> _ownerBySeq = new();
@@ -38,6 +39,9 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
         _scheduled = new ScheduledStore(Primary.AssignSequenceNumber, EnqueueFromScheduled, loggerFactory.CreateLogger<ScheduledStore>());
         _expiry = new ExpiryStore(OnExpired, loggerFactory.CreateLogger<ExpiryStore>());
         Sessions = new SessionStore(options.LockDuration, Primary, OnPrimaryLockExpired, loggerFactory);
+        _dedup = options.RequiresDuplicateDetection
+            ? new DuplicateDetectionWindow(options.DuplicateDetectionHistoryTimeWindow ?? TimeSpan.FromMinutes(1))
+            : null;
     }
 
     private void EnqueueFromScheduled(Message message) => Enqueue(message);
@@ -54,6 +58,18 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
 
     public void Enqueue(Message message)
     {
+        // Service Bus silently accepts duplicate sends within the dedup window — the
+        // sender sees Accepted, but the broker drops the message. We mirror that here
+        // by no-oping. Messages without a MessageId aren't dedup-eligible.
+        if (_dedup is not null && message.Properties?.MessageId is string id && id.Length > 0)
+        {
+            if (!_dedup.TryAdd(id))
+            {
+                _logger.LogTrace("Dropped duplicate enqueue messageId={MessageId}", id);
+                return;
+            }
+        }
+
         var sessionId = ReadSessionId(message);
         if (!string.IsNullOrEmpty(sessionId))
         {

@@ -57,6 +57,12 @@ internal sealed class TestQueue : IAsyncDisposable
                         createOpts.DefaultMessageTimeToLive = ttl;
                     if (options.DeadLetteringOnMessageExpiration)
                         createOpts.DeadLetteringOnMessageExpiration = true;
+                    if (options.RequiresDuplicateDetection)
+                    {
+                        createOpts.RequiresDuplicateDetection = true;
+                        if (options.DuplicateDetectionHistoryTimeWindow is { } w)
+                            createOpts.DuplicateDetectionHistoryTimeWindow = w;
+                    }
                     await admin.CreateQueueAsync(createOpts, ct);
                 }
                 catch (Exception ex) when (options.RequiresSession && ex.Message.Contains("RequiresSession", StringComparison.Ordinal))
@@ -64,6 +70,11 @@ internal sealed class TestQueue : IAsyncDisposable
                     // Sessions require Standard+ tier; the default `task sb:up` provisions Basic.
                     // Skip Azure parity for session tests until the namespace is upgraded.
                     Assert.Skip($"Azure namespace does not support sessions (likely Basic SKU). Upgrade the namespace to Standard to run session parity tests.");
+                }
+                catch (Exception ex) when (options.RequiresDuplicateDetection && ex.Message.Contains("'Basic' tier", StringComparison.Ordinal))
+                {
+                    // Duplicate detection requires Standard+ tier.
+                    Assert.Skip("Azure namespace does not support duplicate detection (Basic SKU). Upgrade the namespace to Standard to run dedup parity tests.");
                 }
                 return new TestQueue
                 {
