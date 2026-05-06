@@ -26,6 +26,21 @@ tasks:
     cmds:
       - dotnet run --project {{.PROJECT}}
 
+  image:build:
+    desc: Build a container image (asbe:latest) using the .NET SDK container support
+    cmds:
+      - dotnet publish {{.PROJECT}} /t:PublishContainer -p:ContainerImageTag=latest --verbosity quiet
+
+  image:run:
+    desc: Run the container, exposing 5672 on localhost
+    cmds:
+      - docker run --rm -it -p 5672:5672 asbe:latest
+
+  sample:
+    desc: Run the sample Aspire AppHost (build the asbe image first via `task image:build`)
+    cmds:
+      - dotnet run --project samples/AppHost/AsbeSample.AppHost.csproj
+
   test:
     desc: Run all tests (provide tests/asbe.Tests/appsettings.test.json to also exercise the Azure transport)
     cmds:

@@ -62,6 +62,11 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
 
     public void Enqueue(Message message)
     {
+        using var activity = Telemetry.ActivitySource.StartActivity("queue.enqueue", System.Diagnostics.ActivityKind.Producer);
+        activity?.SetTag("messaging.system", "servicebus");
+        activity?.SetTag("messaging.operation.type", "send");
+        if (message.Properties?.MessageId is { } mid) activity?.SetTag("messaging.message.id", mid.ToString());
+
         // Service Bus silently accepts duplicate sends within the dedup window — the
         // sender sees Accepted, but the broker drops the message. We mirror that here
         // by no-oping. Messages without a MessageId aren't dedup-eligible.
@@ -70,6 +75,7 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
             if (!_dedup.TryAdd(id))
             {
                 _logger.LogTrace("Dropped duplicate enqueue messageId={MessageId}", id);
+                activity?.SetTag("asbe.dropped", "duplicate");
                 return;
             }
         }

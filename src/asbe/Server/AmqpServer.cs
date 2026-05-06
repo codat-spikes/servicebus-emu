@@ -25,11 +25,11 @@ sealed class AmqpServer : IAsyncDisposable
 
     public AmqpServer(int port, ILoggerFactory? loggerFactory = null) : this(new Dictionary<string, QueueOptions>(), loggerFactory, port) { }
 
-    public AmqpServer(IReadOnlyDictionary<string, QueueOptions> queues, ILoggerFactory? loggerFactory = null, int port = DefaultPort)
+    public AmqpServer(IReadOnlyDictionary<string, QueueOptions> queues, ILoggerFactory? loggerFactory = null, int port = DefaultPort, string host = "127.0.0.1")
     {
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
         _logger = _loggerFactory.CreateLogger<AmqpServer>();
-        _listenerAddress = $"amqp://127.0.0.1:{port}";
+        _listenerAddress = $"amqp://{host}:{port}";
         _host = new ContainerHost([_listenerAddress]);
         _queues = new QueueStore(queues, RegisterManagement, _loggerFactory);
         _txnManager = new TxnManager(_loggerFactory);

@@ -7,6 +7,18 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <PropertyGroup Label="Container">
+    <EnableSdkContainerSupport>true</EnableSdkContainerSupport>
+    <ContainerRepository>asbe</ContainerRepository>
+    <ContainerFamily>noble-chiseled</ContainerFamily>
+    <ContainerUser>app</ContainerUser>
+  </PropertyGroup>
+
+  <ItemGroup Label="Container">
+    <ContainerPort Include="5672" Type="tcp" />
+    <ContainerEnvironmentVariable Include="Asbe__Host" Value="0.0.0.0" />
+  </ItemGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="asbe.Tests" />
   </ItemGroup>
@@ -22,12 +34,15 @@
     <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.1" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.7" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.7" />
+    <PackageReference Include="OpenTelemetry" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
   </ItemGroup>
 
 </Project>

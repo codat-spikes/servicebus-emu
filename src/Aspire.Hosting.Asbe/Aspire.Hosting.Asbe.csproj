@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Aspire.Hosting</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <Description>Aspire hosting integration for asbe — an in-process Azure Service Bus emulator. Exposes AddAsbe / AddQueue / AddTopic / AddSubscription on the AppHost builder.</Description>
+    <PackageTags>aspire;hosting;servicebus;asbe;emulator</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting" Version="13.2.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="asbe.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\asbe\asbe.csproj" />
+    <ProjectReference Include="..\..\src\Aspire.Hosting.Asbe\Aspire.Hosting.Asbe.csproj" />
   </ItemGroup>
 
 </Project>

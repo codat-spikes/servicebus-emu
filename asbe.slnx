@@ -1,4 +1,6 @@
 <Solution>
   <Project Path="src/asbe/asbe.csproj" />
+  <Project Path="src/Aspire.Hosting.Asbe/Aspire.Hosting.Asbe.csproj" />
+  <Project Path="samples/AppHost/AsbeSample.AppHost.csproj" />
   <Project Path="tests/asbe.Tests/asbe.Tests.csproj" />
 </Solution>

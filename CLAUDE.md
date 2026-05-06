@@ -4,8 +4,10 @@
 
 ## Layout
 
-- `src/asbe/` — the app: `AmqpServer` (AMQPNetLite listener) + `AmqpClient` (Azure.Messaging.ServiceBus).
-- `tests/asbe.Tests/` — xUnit v3 + Microsoft Testing Platform. Tests are parameterized over transport (`Local`, `Azure`) so the same assertions run against the in-proc server and a real Service Bus.
+- `src/asbe/` — the app: `AmqpServer` (AMQPNetLite listener) + `AmqpClient` (Azure.Messaging.ServiceBus). Configuration binds from the `Asbe:{Queues,Topics}` config section (or env vars like `Asbe__Queues__0__Name`); see `AsbeOptions.cs`. Container image built via `task image:build` (uses .NET SDK container support).
+- `src/Aspire.Hosting.Asbe/` — Aspire hosting integration NuGet package. Exposes `builder.AddAsbe("sb")` + `AddQueue`/`AddTopic`/`AddSubscription` fluent API. Multiple consumers can independently call `AddQueue("name")` and the registry dedupes by name; the `BeforeStartEvent` handler flattens the registry into env-var annotations on the container.
+- `samples/AppHost/` — minimal Aspire AppHost demonstrating the integration end-to-end. Run with `task sample` (after `task image:build`).
+- `tests/asbe.Tests/` — xUnit v3 + Microsoft Testing Platform. Tests are parameterized over transport (`Local`, `Azure`) so the same assertions run against the in-proc server and a real Service Bus. `AspireHostingTests.cs` covers the hosting integration's dedup + env-var flattening + connection string shape.
 
 ## Taskfile
 
