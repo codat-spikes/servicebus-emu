@@ -88,9 +88,17 @@ sealed class Topic : IDisposable
         var delivered = 0;
         foreach (var (subName, subscription) in _subscriptions)
         {
-            if (!_subscriptionRules[subName].Matches(message)) continue;
-            subscription.Enqueue(Clone(message));
-            delivered++;
+            // Service Bus delivers one copy per matching rule (so two rules matching the
+            // same message produces two deliveries on that subscription), and each rule's
+            // action mutates only its own copy.
+            var matches = _subscriptionRules[subName].Matching(message);
+            for (int i = 0; i < matches.Count; i++)
+            {
+                var clone = Clone(message);
+                matches[i].Action.Apply(clone);
+                subscription.Enqueue(clone);
+                delivered++;
+            }
         }
         _logger.LogTrace("Topic '{Topic}' fanned message to {Delivered}/{Total} subscription(s)",
             Name, delivered, _subscriptions.Count);

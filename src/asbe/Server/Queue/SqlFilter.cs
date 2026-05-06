@@ -307,7 +307,7 @@ static class SqlLexer
             if (c == '>' && i + 1 < s.Length && s[i + 1] == '=') { result.Add(new Tok(TokKind.Sym, ">=")); i += 2; continue; }
             if (c == '<' && i + 1 < s.Length && s[i + 1] == '>') { result.Add(new Tok(TokKind.Sym, "<>")); i += 2; continue; }
             if (c == '!' && i + 1 < s.Length && s[i + 1] == '=') { result.Add(new Tok(TokKind.Sym, "!=")); i += 2; continue; }
-            if ("=<>(),.".IndexOf(c) >= 0) { result.Add(new Tok(TokKind.Sym, c.ToString())); i++; continue; }
+            if ("=<>(),.;".IndexOf(c) >= 0) { result.Add(new Tok(TokKind.Sym, c.ToString())); i++; continue; }
 
             throw new FormatException($"Unexpected character '{c}' at position {i}.");
         }
@@ -323,7 +323,7 @@ sealed class SqlParser
     private readonly List<Tok> _t;
     private int _p;
 
-    private SqlParser(List<Tok> tokens) { _t = tokens; }
+    internal SqlParser(List<Tok> tokens) { _t = tokens; }
 
     public static SqlExpr Parse(string expression)
     {
@@ -334,10 +334,10 @@ sealed class SqlParser
         return e;
     }
 
-    private Tok Peek() => _t[_p];
-    private Tok Next() => _t[_p++];
+    internal Tok Peek() => _t[_p];
+    internal Tok Next() => _t[_p++];
 
-    private bool MatchKeyword(string kw)
+    internal bool MatchKeyword(string kw)
     {
         var t = Peek();
         if (t.Kind == TokKind.Ident && t.Text.Equals(kw, StringComparison.OrdinalIgnoreCase))
@@ -348,7 +348,7 @@ sealed class SqlParser
         return false;
     }
 
-    private bool MatchSym(string sym)
+    internal bool MatchSym(string sym)
     {
         var t = Peek();
         if (t.Kind == TokKind.Sym && t.Text == sym) { _p++; return true; }
@@ -361,7 +361,7 @@ sealed class SqlParser
             throw new FormatException($"Expected '{sym}', got '{Peek().Text}'.");
     }
 
-    private SqlExpr ParseOr()
+    internal SqlExpr ParseOr()
     {
         var left = ParseAnd();
         while (MatchKeyword("or")) left = new OrExpr(left, ParseAnd());

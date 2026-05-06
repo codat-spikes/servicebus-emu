@@ -22,6 +22,7 @@ static class RuleCodec
     public const string SqlFilterKey = "sql-filter";
     public const string CorrelationFilterKey = "correlation-filter";
     public const string CorrelationPropertiesKey = "properties";
+    public const string SqlRuleActionKey = "sql-rule-action";
 
     // Descriptors are emitted as symbols rather than ulongs. Microsoft.Azure.Amqp
     // registers known types under both the symbolic name and the ulong code, but its
@@ -30,10 +31,24 @@ static class RuleCodec
     // its known-type table cleanly.
     private static readonly Symbol RuleDescriptionDescriptor = "com.microsoft:rule-description:list";
     private static readonly Symbol EmptyRuleActionDescriptor = "com.microsoft:empty-rule-action:list";
+    private static readonly Symbol SqlRuleActionDescriptor = "com.microsoft:sql-rule-action:list";
     private static readonly Symbol SqlRuleFilterDescriptor = "com.microsoft:sql-filter:list";
     private static readonly Symbol TrueRuleFilterDescriptor = "com.microsoft:true-filter:list";
     private static readonly Symbol FalseRuleFilterDescriptor = "com.microsoft:false-filter:list";
     private static readonly Symbol CorrelationRuleFilterDescriptor = "com.microsoft:correlation-filter:list";
+
+    public static (RuleFilter? Filter, RuleAction Action) DecodeRuleDescription(Map ruleDescription)
+    {
+        var filter = DecodeFilter(ruleDescription);
+        RuleAction action = RuleAction.Empty;
+        if (ruleDescription[SqlRuleActionKey] is Map sa
+            && sa["expression"] is string expr
+            && !string.IsNullOrWhiteSpace(expr))
+        {
+            action = new SqlRuleAction(expr);
+        }
+        return (filter, action);
+    }
 
     public static RuleFilter? DecodeFilter(Map ruleDescription)
     {
@@ -70,7 +85,7 @@ static class RuleCodec
         ["rule-description"] = new DescribedValue(RuleDescriptionDescriptor, new List
         {
             EncodeFilter(rule.Filter),
-            EncodeEmptyAction(),
+            EncodeAction(rule.Action),
             rule.Name,
             rule.CreatedAt,
         }),
@@ -100,6 +115,9 @@ static class RuleCodec
         });
     }
 
-    private static DescribedValue EncodeEmptyAction() =>
-        new(EmptyRuleActionDescriptor, new List());
+    private static DescribedValue EncodeAction(RuleAction action) => action switch
+    {
+        SqlRuleAction sql => new DescribedValue(SqlRuleActionDescriptor, new List { sql.Expression, 20 }),
+        _ => new DescribedValue(EmptyRuleActionDescriptor, new List()),
+    };
 }

@@ -218,10 +218,10 @@ sealed class ManagementRequestProcessor : IRequestProcessor
             return Status(400, "Missing rule-name.");
         if (body["rule-description"] is not Map ruleDescription)
             return Status(400, "Missing rule-description.");
-        var filter = RuleCodec.DecodeFilter(ruleDescription);
+        var (filter, action) = RuleCodec.DecodeRuleDescription(ruleDescription);
         if (filter is null) return Status(400, "Rule must specify a sql-filter or correlation-filter.");
 
-        return _rules.Add(ruleName, filter) switch
+        return _rules.Add(ruleName, filter, action) switch
         {
             SubscriptionRules.AddResult.Added => Status(200, "OK"),
             SubscriptionRules.AddResult.Conflict => Status(409, $"Rule '{ruleName}' already exists."),

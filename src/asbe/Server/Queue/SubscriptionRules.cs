@@ -1,9 +1,11 @@
 using Amqp;
 
-// Mutable, thread-safe ordered store of named rule filters for a subscription.
-// Service Bus rule semantics: messages are delivered when *any* rule matches (OR).
-// A subscription with zero rules drops every message — matches Azure when the user
-// removes $Default without adding a replacement.
+// Mutable, thread-safe ordered store of named rule filter+action pairs for a
+// subscription. Service Bus rule semantics: each matching rule produces its own
+// delivered copy (the message is fanned out per-match, not just once per subscription),
+// so callers iterate Matching() rather than asking a single Matches bool. A subscription
+// with zero rules drops every message — matches Azure when the user removes $Default
+// without adding a replacement.
 sealed class SubscriptionRules
 {
     public const string DefaultRuleName = "$Default";
@@ -15,23 +17,27 @@ sealed class SubscriptionRules
     {
         if (seed is null || seed.Count == 0)
         {
-            _rules.Add(new NamedRule(DefaultRuleName, RuleFilter.MatchAll, DateTime.UtcNow));
+            _rules.Add(new NamedRule(DefaultRuleName, RuleFilter.MatchAll, RuleAction.Empty, DateTime.UtcNow));
             return;
         }
         for (int i = 0; i < seed.Count; i++)
         {
             var name = i == 0 ? DefaultRuleName : $"rule{i}";
-            _rules.Add(new NamedRule(name, seed[i], DateTime.UtcNow));
+            _rules.Add(new NamedRule(name, seed[i], RuleAction.Empty, DateTime.UtcNow));
         }
     }
 
-    public bool Matches(Message message)
+    public IReadOnlyList<NamedRule> Matching(Message message)
     {
         lock (_gate)
         {
+            List<NamedRule>? hits = null;
             for (int i = 0; i < _rules.Count; i++)
-                if (_rules[i].Filter.Matches(message)) return true;
-            return false;
+            {
+                if (_rules[i].Filter.Matches(message))
+                    (hits ??= []).Add(_rules[i]);
+            }
+            return (IReadOnlyList<NamedRule>?)hits ?? Array.Empty<NamedRule>();
         }
     }
 
@@ -40,14 +46,14 @@ sealed class SubscriptionRules
         lock (_gate) return _rules.ToArray();
     }
 
-    public AddResult Add(string name, RuleFilter filter)
+    public AddResult Add(string name, RuleFilter filter, RuleAction action)
     {
         lock (_gate)
         {
             for (int i = 0; i < _rules.Count; i++)
                 if (string.Equals(_rules[i].Name, name, StringComparison.Ordinal))
                     return AddResult.Conflict;
-            _rules.Add(new NamedRule(name, filter, DateTime.UtcNow));
+            _rules.Add(new NamedRule(name, filter, action, DateTime.UtcNow));
             return AddResult.Added;
         }
     }
@@ -71,4 +77,4 @@ sealed class SubscriptionRules
     public enum AddResult { Added, Conflict }
 }
 
-readonly record struct NamedRule(string Name, RuleFilter Filter, DateTime CreatedAt);
+readonly record struct NamedRule(string Name, RuleFilter Filter, RuleAction Action, DateTime CreatedAt);
