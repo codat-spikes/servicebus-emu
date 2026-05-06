@@ -7,6 +7,7 @@ public sealed class CoreTests
 {
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task SendAndReceive_RoundTripsMessageBody(Transport transport)
     {
@@ -27,6 +28,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task PeekLock_Complete_RemovesMessage(Transport transport)
     {
@@ -48,6 +50,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task PeekLock_Abandon_BumpsDeliveryCount(Transport transport)
     {
@@ -72,6 +75,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task DeadLetterQueue_ReceivesExplicitlyDeadLetteredMessages(Transport transport)
     {
@@ -100,6 +104,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Peek_ReturnsMessagesWithSequenceNumbersWithoutConsuming(Transport transport)
     {
@@ -133,6 +138,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Peek_FromSequenceNumber_SkipsEarlierMessages(Transport transport)
     {
@@ -155,6 +161,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task SendMessages_Batch_DeliversAllInOrder(Transport transport)
     {
@@ -181,6 +188,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task SendMessages_BatchViaCreateMessageBatch_DeliversAll(Transport transport)
     {
@@ -212,6 +220,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Peek_AfterComplete_SkipsCompletedMessages(Transport transport)
     {
@@ -244,6 +253,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Peek_FromSequenceNumberPastTail_ReturnsEmpty(Transport transport)
     {
@@ -263,6 +273,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Peek_MaxMessages_RespectsLimit(Transport transport)
     {
@@ -280,6 +291,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Peek_OnDeadLetterSubqueue_ReturnsDeadLetteredMessages(Transport transport)
     {
@@ -312,6 +324,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task PeekLock_DeadLetter_RemovesFromMainQueue(Transport transport)
     {
@@ -332,6 +345,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Transaction_Commit_FlushesSends(Transport transport)
     {
@@ -359,6 +373,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Transaction_Rollback_DropsSends(Transport transport)
     {
@@ -382,6 +397,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Transaction_Commit_AppliesComplete(Transport transport)
     {
@@ -407,6 +423,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task ReceiveAndDelete_DropsMessagesWithoutDisposition(Transport transport)
     {
@@ -439,6 +456,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Defer_RemovesFromReadyQueue_AndReceiveBySequenceNumber_ReturnsIt(Transport transport)
     {
@@ -469,6 +487,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Defer_DeadLetter_MovesToDlq(Transport transport)
     {
@@ -502,6 +521,7 @@ public sealed class CoreTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Defer_ReceiveMultipleBySequenceNumber_ReturnsAll(Transport transport)
     {

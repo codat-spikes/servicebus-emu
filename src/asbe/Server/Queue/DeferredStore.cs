@@ -21,6 +21,8 @@ sealed class DeferredStore : IDisposable
         _logger = logger ?? NullLogger<DeferredStore>.Instance;
     }
 
+    public int Count => _bySeq.Count;
+
     public void Add(long sequenceNumber, Message message)
     {
         _bySeq[sequenceNumber] = new DeferredEntry(sequenceNumber, message);

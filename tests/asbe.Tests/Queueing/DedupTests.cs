@@ -7,6 +7,7 @@ public sealed class DedupTests
 {
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task DuplicateMessageId_WithinWindow_IsDroppedSilently(Transport transport)
     {

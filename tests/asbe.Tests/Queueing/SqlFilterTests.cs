@@ -11,6 +11,7 @@ namespace Queueing;
 public sealed class SqlFilterTests
 {
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public sealed class Equality
     {
         [Theory]
@@ -30,6 +31,7 @@ public sealed class SqlFilterTests
     }
 
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public sealed class Numeric
     {
         [Theory]
@@ -58,6 +60,7 @@ public sealed class SqlFilterTests
     }
 
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public sealed class BooleanAndNull
     {
         [Theory]
@@ -85,6 +88,7 @@ public sealed class SqlFilterTests
     }
 
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public sealed class ThreeValuedLogic
     {
         // NULL = 'x' is unknown, which is not a match.
@@ -111,6 +115,7 @@ public sealed class SqlFilterTests
     }
 
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public sealed class Logical
     {
         [Fact]
@@ -155,6 +160,7 @@ public sealed class SqlFilterTests
     }
 
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public sealed class Like
     {
         [Theory]
@@ -185,6 +191,7 @@ public sealed class SqlFilterTests
     }
 
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public sealed class InOperator
     {
         [Theory]
@@ -207,6 +214,7 @@ public sealed class SqlFilterTests
     }
 
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public sealed class Exists
     {
         [Fact]
@@ -224,6 +232,7 @@ public sealed class SqlFilterTests
     }
 
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public sealed class SystemProperties
     {
         [Fact]
@@ -275,6 +284,7 @@ public sealed class SqlFilterTests
     }
 
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public sealed class CaseInsensitivity
     {
         [Theory]
@@ -298,6 +308,7 @@ public sealed class SqlFilterTests
     // Realistic compound expressions that combine several grammar pieces at
     // once — these are the shapes that show up in real subscription rules.
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public sealed class Complex
     {
         // Tier-and-region routing with a numeric threshold and a system-property carve-out.
@@ -416,6 +427,7 @@ public sealed class SqlFilterTests
     }
 
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public sealed class ParseErrors
     {
         [Theory]

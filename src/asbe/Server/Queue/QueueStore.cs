@@ -41,7 +41,32 @@ sealed class QueueStore : IDisposable
     public string SubscriptionManagementAddressFor(string topic, string subscription) =>
         NormalizeName(topic) + SubscriptionsSegment + subscription + ManagementSuffix;
 
-    public EndpointResolution Get(string address)
+    // Strict lookups for the HTTP management plane and any caller that must not
+    // auto-create on miss. Returns false if the entity doesn't exist; never has side
+    // effects. The AMQP attach path uses ResolveAmqpAddress instead, which auto-creates.
+    public bool TryGetQueue(string name, out InMemoryQueue queue) =>
+        _queues.TryGetValue(NormalizeName(name), out queue!);
+
+    public bool TryGetTopic(string name, out Topic topic) =>
+        _topics.TryGetValue(NormalizeName(name), out topic!);
+
+    public bool TryGetSubscription(string topic, string subscription, out InMemoryQueue queue)
+    {
+        queue = null!;
+        if (!_topics.TryGetValue(NormalizeName(topic), out var t)) return false;
+        return t.TryGetSubscription(subscription, out queue);
+    }
+
+    // Snapshot enumerators. ConcurrentDictionary's enumerator is already snapshot-like
+    // (won't throw on concurrent modification), but materialising into a list keeps
+    // callers from holding internal state across awaits / long iterations.
+    public IReadOnlyList<KeyValuePair<string, InMemoryQueue>> EnumerateQueues() => _queues.ToArray();
+    public IReadOnlyList<KeyValuePair<string, Topic>> EnumerateTopics() => _topics.ToArray();
+
+    // AMQP attach-time address resolver. Auto-creates queues on miss because the AMQP
+    // surface has no separate "create entity" call — first attach materialises the
+    // queue if it isn't already declared.
+    public EndpointResolution ResolveAmqpAddress(string address)
     {
         var trimmed = address.TrimStart('/');
 

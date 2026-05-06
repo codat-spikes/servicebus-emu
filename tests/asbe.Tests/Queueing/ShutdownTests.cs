@@ -12,6 +12,7 @@ public sealed class ShutdownTests
 
     [Fact(Timeout = 30_000)]
     [Trait("Category", "Edge")]
+    [Trait("Speed", "Fast")]
     public async Task DisposeAsync_FreesListenerPort()
     {
         await using (var server = new AmqpServer(TestPort))
@@ -24,6 +25,7 @@ public sealed class ShutdownTests
 
     [Fact(Timeout = 30_000)]
     [Trait("Category", "Edge")]
+    [Trait("Speed", "Fast")]
     public async Task DisposeAsync_IsIdempotent()
     {
         var server = new AmqpServer(TestPort);
@@ -34,6 +36,7 @@ public sealed class ShutdownTests
 
     [Fact(Timeout = 30_000)]
     [Trait("Category", "Edge")]
+    [Trait("Speed", "Fast")]
     public async Task DisposeAsync_BeforeStart_DoesNotThrow()
     {
         var server = new AmqpServer(TestPort);
@@ -42,6 +45,7 @@ public sealed class ShutdownTests
 
     [Fact(Timeout = 30_000)]
     [Trait("Category", "Edge")]
+    [Trait("Speed", "Fast")]
     public async Task DisposeAsync_WithQueuesAndTopics_DoesNotThrow()
     {
         await using var server = new AmqpServer(TestPort);
@@ -57,6 +61,7 @@ public sealed class ShutdownTests
 
     [Fact(Timeout = 30_000)]
     [Trait("Category", "Edge")]
+    [Trait("Speed", "Fast")]
     public async Task Server_CanBeStartedAndDisposed_Repeatedly_OnSamePort()
     {
         for (int i = 0; i < 3; i++)

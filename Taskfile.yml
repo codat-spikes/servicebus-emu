@@ -47,6 +47,16 @@ tasks:
       # --no-ansi/--no-progress make the MTP runner emit plain stdout so output isn't lost when piped or captured.
       - dotnet run --project {{.TEST_PROJECT}} -- --no-ansi --no-progress {{.CLI_ARGS}}
 
+  test:fast:
+    desc: Fast subset (Speed=Fast) — covers ~80% of tests in ~20% of the time; recommended dev loop
+    cmds:
+      - dotnet run --project {{.TEST_PROJECT}} -- --no-ansi --no-progress --filter-trait "Speed=Fast" {{.CLI_ARGS}}
+
+  test:slow:
+    desc: Slow subset (Speed=Slow) — timing-dependent tests excluded from test:fast
+    cmds:
+      - dotnet run --project {{.TEST_PROJECT}} -- --no-ansi --no-progress --filter-trait "Speed=Slow" {{.CLI_ARGS}}
+
   test:core:
     desc: Fast core parity tests (send/receive/complete/abandon/peek/explicit-DLQ) — quickest feedback loop
     cmds:

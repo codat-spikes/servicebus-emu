@@ -13,6 +13,7 @@ public sealed class RuleActionTests
 {
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task SetAppProperty_OverwritesExisting(Transport transport)
     {
@@ -43,6 +44,7 @@ public sealed class RuleActionTests
 
     [Fact(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public void MultiStatementAction_LocalParser_Applies()
     {
         var stmts = SqlActionParser.Parse("SET tier = 'gold', SET stamped = 'yes', REMOVE drop_me");
@@ -57,6 +59,7 @@ public sealed class RuleActionTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task SetSystemProperty_UpdatesSubject(Transport transport)
     {
@@ -84,6 +87,7 @@ public sealed class RuleActionTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task RemoveAppProperty_DropsKey(Transport transport)
     {
@@ -114,6 +118,7 @@ public sealed class RuleActionTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task SetSystemProperty_UpdatesContentType(Transport transport)
     {
@@ -141,6 +146,7 @@ public sealed class RuleActionTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task RuleWithoutAction_StillRoutes(Transport transport)
     {
@@ -167,6 +173,7 @@ public sealed class RuleActionTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task SqlRuleAction_RoundTripsThroughGetRules(Transport transport)
     {

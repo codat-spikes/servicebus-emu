@@ -10,6 +10,7 @@ public class AspireHostingTests
 {
     [Fact]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public void AddQueue_WithSameName_DedupsAndAppliesLastConfiguration()
     {
         var builder = DistributedApplication.CreateBuilder([]);
@@ -25,6 +26,7 @@ public class AspireHostingTests
 
     [Fact]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public void AddTopic_AccumulatesSubscriptionsFromMultipleCallers()
     {
         var builder = DistributedApplication.CreateBuilder([]);
@@ -42,6 +44,7 @@ public class AspireHostingTests
 
     [Fact]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public void Flatten_ProducesEnvVarsConsumedByAsbeOptionsBinder()
     {
         var builder = DistributedApplication.CreateBuilder([]);
@@ -79,6 +82,7 @@ public class AspireHostingTests
 
     [Fact]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     public void ConnectionStringExpression_UsesDevelopmentEmulatorFormat()
     {
         var builder = DistributedApplication.CreateBuilder([]);

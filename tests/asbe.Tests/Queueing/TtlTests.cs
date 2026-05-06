@@ -7,6 +7,7 @@ public sealed class TtlTests
 {
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Timing")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task MessageTimeToLive_Expires_AndDeadLetters(Transport transport)
     {
@@ -40,6 +41,7 @@ public sealed class TtlTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Timing")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task DefaultMessageTimeToLive_AppliesToMessagesWithoutOwnTtl(Transport transport)
     {
@@ -71,6 +73,7 @@ public sealed class TtlTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Timing")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task PeekLockedMessage_PastTtl_DeadLettersOnLockExpiry(Transport transport)
     {

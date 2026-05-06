@@ -51,6 +51,33 @@ sealed class AmqpServer : IAsyncDisposable
 
     public bool DeleteTopic(string name) => _queues.DeleteTopic(name);
 
+    public bool TryGetQueueSnapshot(string name, out EntityRuntimeSnapshot snapshot)
+    {
+        if (_queues.TryGetQueue(name, out var queue)) { snapshot = queue.SnapshotRuntime(); return true; }
+        snapshot = default;
+        return false;
+    }
+
+    public bool TryGetTopicSnapshot(string name, out TopicRuntimeSnapshot snapshot)
+    {
+        if (_queues.TryGetTopic(name, out var topic)) { snapshot = topic.SnapshotRuntime(); return true; }
+        snapshot = default;
+        return false;
+    }
+
+    public bool TryGetSubscriptionSnapshot(string topic, string subscription, out EntityRuntimeSnapshot snapshot)
+    {
+        if (_queues.TryGetSubscription(topic, subscription, out var queue)) { snapshot = queue.SnapshotRuntime(); return true; }
+        snapshot = default;
+        return false;
+    }
+
+    public IReadOnlyList<string> ListQueueNames() =>
+        _queues.EnumerateQueues().Select(kv => kv.Key).ToArray();
+
+    public IReadOnlyList<string> ListTopicNames() =>
+        _queues.EnumerateTopics().Select(kv => kv.Key).ToArray();
+
     public bool DeleteQueue(string name)
     {
         // We deliberately don't call _host.UnregisterRequestProcessor here. AmqpNetLite's

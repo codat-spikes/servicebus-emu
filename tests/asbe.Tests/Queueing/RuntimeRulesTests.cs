@@ -15,6 +15,7 @@ public sealed class RuntimeRulesTests
 {
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task DefaultRuleIsMatchAll_SeededOnSubscriptionCreate(Transport transport)
     {
@@ -33,6 +34,7 @@ public sealed class RuntimeRulesTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task AddRule_RoutesMatchingMessages(Transport transport)
     {
@@ -70,6 +72,7 @@ public sealed class RuntimeRulesTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task AddCorrelationRule_RoundTripsThroughGetRules(Transport transport)
     {
@@ -98,6 +101,7 @@ public sealed class RuntimeRulesTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task RemoveRule_StopsRouting(Transport transport)
     {
@@ -119,6 +123,7 @@ public sealed class RuntimeRulesTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task AddRule_DuplicateName_Throws(Transport transport)
     {

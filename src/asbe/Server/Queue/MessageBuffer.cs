@@ -53,6 +53,11 @@ sealed class MessageBuffer : IDisposable
         get { lock (_trackedLock) return _tracked.Count > 0; }
     }
 
+    public int Count
+    {
+        get { lock (_trackedLock) return _tracked.Count; }
+    }
+
     public IReadOnlyList<Message> Peek(long fromSequenceNumber, int maxCount)
     {
         if (maxCount <= 0) return [];

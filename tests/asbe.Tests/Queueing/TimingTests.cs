@@ -8,6 +8,7 @@ public sealed class TimingTests
 {
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Timing")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task PeekLock_LockExpires_RedeliversWithBumpedDeliveryCount(Transport transport)
     {
@@ -33,6 +34,7 @@ public sealed class TimingTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Timing")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task PeekLock_RenewLock_ExtendsLock(Transport transport)
     {
@@ -62,6 +64,7 @@ public sealed class TimingTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Timing")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task MaxDeliveryCount_RoutesMessageToDeadLetterQueue(Transport transport)
     {
@@ -95,6 +98,7 @@ public sealed class TimingTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Timing")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task ScheduleMessage_DelaysDelivery_UntilEnqueueTime(Transport transport)
     {
@@ -119,6 +123,7 @@ public sealed class TimingTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Timing")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task CancelScheduledMessage_PreventsDelivery(Transport transport)
     {
@@ -144,6 +149,7 @@ public sealed class TimingTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Timing")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task ReceiverDispose_DoesNotShortcutLock_NewReceiverWaitsForExpiry(Transport transport)
     {
@@ -184,6 +190,7 @@ public sealed class TimingTests
 
     [Theory(Timeout = 120_000)]
     [Trait("Category", "Timing")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Transaction_Rollback_LeavesLockHeldUntilExpiry(Transport transport)
     {

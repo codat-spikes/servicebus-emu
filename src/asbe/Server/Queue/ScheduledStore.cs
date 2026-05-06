@@ -24,6 +24,11 @@ sealed class ScheduledStore : IDisposable
         _timer = new Timer(_ => SafeFlush(), null, Timeout.Infinite, Timeout.Infinite);
     }
 
+    public int Count
+    {
+        get { lock (_gate) return _bySeq.Count; }
+    }
+
     public long Schedule(Message message, DateTime enqueueAtUtc)
     {
         var seq = _assignSequence(message);

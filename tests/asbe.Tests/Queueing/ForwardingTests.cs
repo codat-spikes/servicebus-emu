@@ -7,6 +7,7 @@ public sealed class ForwardingTests
 {
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task ForwardTo_RoutesMessagesToTargetQueue(Transport transport)
     {
@@ -27,6 +28,7 @@ public sealed class ForwardingTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task ForwardDeadLetteredMessagesTo_RoutesDeadLettersToTargetQueue(Transport transport)
     {

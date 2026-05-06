@@ -17,6 +17,13 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
     public MessageBuffer Primary { get; }
     public IQueueEndpoint DeadLetter => _deadLetterReceiver;
     public SessionStore Sessions { get; }
+    public DateTimeOffset CreatedAt { get; }
+    public DateTimeOffset UpdatedAt { get; private set; }
+    // AccessedAt is bumped lock-free on the enqueue path; readers get a consistent
+    // long via Volatile.Read. We don't bump on dequeue to keep that hot path clean —
+    // matches Azure's "approximate" documentation for the property.
+    public DateTimeOffset AccessedAt => new(Volatile.Read(ref _accessedAtTicks), TimeSpan.Zero);
+    private long _accessedAtTicks;
 
     private readonly MessageBuffer _deadLetter;
     private readonly DeadLetterReceiver _deadLetterReceiver;
@@ -46,6 +53,29 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
         _dedup = options.RequiresDuplicateDetection
             ? new DuplicateDetectionWindow(options.DuplicateDetectionHistoryTimeWindow ?? TimeSpan.FromMinutes(1))
             : null;
+        var now = DateTimeOffset.UtcNow;
+        CreatedAt = now;
+        UpdatedAt = now;
+        _accessedAtTicks = now.UtcTicks;
+    }
+
+    public EntityRuntimeSnapshot SnapshotRuntime()
+    {
+        var active = Primary.Count;
+        var dead = _deadLetter.Count;
+        var scheduled = _scheduled.Count;
+        var deferred = _deferred.Count;
+        return new EntityRuntimeSnapshot(
+            ActiveMessageCount: active + deferred,
+            DeadLetterMessageCount: dead,
+            ScheduledMessageCount: scheduled,
+            TransferMessageCount: 0,
+            TransferDeadLetterMessageCount: 0,
+            TotalMessageCount: active + deferred + dead + scheduled,
+            SizeInBytes: 0,
+            CreatedAt: CreatedAt,
+            UpdatedAt: UpdatedAt,
+            AccessedAt: AccessedAt);
     }
 
     private void EnqueueFromScheduled(Message message) => Enqueue(message);
@@ -62,6 +92,7 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
 
     public void Enqueue(Message message)
     {
+        Volatile.Write(ref _accessedAtTicks, DateTime.UtcNow.Ticks);
         using var activity = Telemetry.ActivitySource.StartActivity("queue.enqueue", System.Diagnostics.ActivityKind.Producer);
         activity?.SetTag("messaging.system", "servicebus");
         activity?.SetTag("messaging.operation.type", "send");

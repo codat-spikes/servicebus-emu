@@ -7,6 +7,7 @@ public sealed class SessionTests
 {
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task SessionReceiver_OnlySeesItsOwnSessionMessages(Transport transport)
     {
@@ -40,6 +41,7 @@ public sealed class SessionTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task SessionState_RoundTrips(Transport transport)
     {
@@ -60,6 +62,7 @@ public sealed class SessionTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Timing")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task SessionLock_CanBeRenewed(Transport transport)
     {
@@ -78,6 +81,7 @@ public sealed class SessionTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Edge")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task SessionLock_HeldByOneClient_BlocksAcquireFromAnotherClient(Transport transport)
     {
@@ -103,6 +107,7 @@ public sealed class SessionTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Edge")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task SessionLock_AfterFirstClientReleases_SecondClientCanAcquire(Transport transport)
     {
@@ -129,6 +134,7 @@ public sealed class SessionTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Edge")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task NextAvailableSession_PicksAnUnlockedSession(Transport transport)
     {
@@ -148,6 +154,7 @@ public sealed class SessionTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Timing")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task NextAvailableSession_BlocksUntilSessionAppears(Transport transport)
     {

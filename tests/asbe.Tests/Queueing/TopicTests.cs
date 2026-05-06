@@ -7,6 +7,7 @@ public sealed class TopicTests
 {
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Send_FansOutToAllSubscriptions(Transport transport)
     {
@@ -29,6 +30,7 @@ public sealed class TopicTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Subscription_DeadLetter_ReceivesExplicitlyDeadLetteredMessages(Transport transport)
     {
@@ -58,6 +60,7 @@ public sealed class TopicTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Subscriptions_HaveIndependentSequenceNumbers(Transport transport)
     {
@@ -89,6 +92,7 @@ public sealed class TopicTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Timing")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task ScheduledMessage_FansOutAtScheduledTime(Transport transport)
     {
@@ -114,6 +118,7 @@ public sealed class TopicTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task CorrelationFilter_RoutesByCorrelationId(Transport transport)
     {
@@ -148,6 +153,7 @@ public sealed class TopicTests
 
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task CorrelationFilter_MatchesOnApplicationProperty(Transport transport)
     {
@@ -184,6 +190,7 @@ public sealed class TopicTests
     // (and parity with Azure when the connection string is configured).
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
+    [Trait("Speed", "Slow")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task SqlFilter_RoutesByPredicate(Transport transport)
     {
@@ -216,6 +223,7 @@ public sealed class TopicTests
 
     [Fact(Timeout = 30_000)]
     [Trait("Category", "Edge")]
+    [Trait("Speed", "Fast")]
     public async Task Receiver_AttachToBareTopic_IsRejected()
     {
         // Local-only — the SDK won't normally let you build a receiver on a bare topic

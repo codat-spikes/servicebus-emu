@@ -65,7 +65,7 @@ sealed class QueueLinkProcessor : ILinkProcessor
         }
 
         attach.MaxMessageSize = MaxMessageSize;
-        var resolution = _queues.Get(address);
+        var resolution = _queues.ResolveAmqpAddress(address);
 
         if (resolution.Error is { } error)
         {

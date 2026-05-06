@@ -11,6 +11,7 @@ public sealed class EdgeTests
     // docs/DELETE_QUEUE_DEADLOCK.md for the full story.
     [Fact(Timeout = 30_000)]
     [Trait("Category", "Edge")]
+    [Trait("Speed", "Slow")]
     public async Task ScheduleCancelDrainDelete_DoesNotDeadlock()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -39,6 +40,7 @@ public sealed class EdgeTests
     // SDK silently accepts oversized batches and the parity with Azure breaks.
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Edge")]
+    [Trait("Speed", "Fast")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task SendBatch_TryAddMessage_RefusesOnceMaxBatchSizeReached(Transport transport)
     {

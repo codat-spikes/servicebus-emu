@@ -17,6 +17,9 @@ sealed class Topic : IDisposable
     public string Name { get; }
     public IReadOnlyDictionary<string, InMemoryQueue> Subscriptions => _subscriptions;
     public IReadOnlyDictionary<string, SubscriptionRules> Rules => _subscriptionRules;
+    public DateTimeOffset CreatedAt { get; }
+    public DateTimeOffset UpdatedAt { get; private set; }
+    public DateTimeOffset AccessedAt => new(Volatile.Read(ref _accessedAtTicks), TimeSpan.Zero);
 
     private readonly Dictionary<string, InMemoryQueue> _subscriptions;
     private readonly Dictionary<string, SubscriptionRules> _subscriptionRules;
@@ -24,6 +27,7 @@ sealed class Topic : IDisposable
     private readonly ScheduledStore _scheduled;
     private readonly DuplicateDetectionWindow? _dedup;
     private long _nextSequenceNumber;
+    private long _accessedAtTicks;
 
     public Topic(string name, TopicOptions options, ILoggerFactory? loggerFactory = null, Func<string, Action<Message>?>? forwardResolver = null)
     {
@@ -41,7 +45,19 @@ sealed class Topic : IDisposable
         _dedup = options.RequiresDuplicateDetection
             ? new DuplicateDetectionWindow(options.DuplicateDetectionHistoryTimeWindow ?? TimeSpan.FromMinutes(1))
             : null;
+        var now = DateTimeOffset.UtcNow;
+        CreatedAt = now;
+        UpdatedAt = now;
+        _accessedAtTicks = now.UtcTicks;
     }
+
+    public TopicRuntimeSnapshot SnapshotRuntime() => new(
+        ScheduledMessageCount: _scheduled.Count,
+        SizeInBytes: 0,
+        SubscriptionCount: _subscriptions.Count,
+        CreatedAt: CreatedAt,
+        UpdatedAt: UpdatedAt,
+        AccessedAt: AccessedAt);
 
     public long Schedule(Message message)
     {
@@ -68,6 +84,7 @@ sealed class Topic : IDisposable
 
     public void Enqueue(Message message)
     {
+        Volatile.Write(ref _accessedAtTicks, DateTime.UtcNow.Ticks);
         // Topic-level dedup runs once at the ingress, before fan-out — Azure mirrors
         // this (dedup is a topic property, not a subscription property). Subscriptions
         // see at most one copy of any duplicate within the window.
