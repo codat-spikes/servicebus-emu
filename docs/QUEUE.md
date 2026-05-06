@@ -41,16 +41,16 @@
 
 ### Plausible but lower priority
 
-3. **Cross-entity (send-via) transactions.** Single-entity txns are in; `via-partition-key` routing for `ServiceBusClient.CreateTransactionalSender` against a different "via" entity isn't.
-4. **Transfer dead-letter queue.** Azure separates "this message couldn't be auto-forwarded" failures onto a `$Transfer/$DeadLetterQueue` sub-buffer rather than the normal DLQ. Today an unknown forward target dead-letters on the source's regular DLQ with `ForwardingTargetNotFound` — reasonable simplification, but not Azure-accurate.
-5. **`GetQueueRuntimePropertiesAsync` / message counts.** `ActiveMessageCount`, `DeadLetterMessageCount`, `ScheduledMessageCount`, `TransferMessageCount`, `TransferDeadLetterMessageCount`. The SDK's admin client hits HTTP for these — see HTTP/UI plane below.
-6. **`MaxSizeInMegabytes` quota enforcement.** Sends past the configured size cap should fail with `QuotaExceededException`. Not enforced.
-7. **`AutoDeleteOnIdle`.** Entity self-deletion after an idle window. Niche.
-8. **Prefetch.** `ServiceBusReceiverOptions.PrefetchCount`. AMQPNetLite handles AMQP credit-flow so this likely just works, but worth a sanity test under high prefetch values.
-9. **SQL filter arithmetic.** Only if a real subscription rule needs it.
-10. **Deferred messages in `Peek`.** Real Service Bus surfaces deferred messages in peek output; we hide them. Cheap to add — include the `DeferredStore` snapshot in `MessageBuffer.Peek`'s result.
+2. **Cross-entity (send-via) transactions.** Single-entity txns are in; `via-partition-key` routing for `ServiceBusClient.CreateTransactionalSender` against a different "via" entity isn't.
+3. **Transfer dead-letter queue.** Azure separates "this message couldn't be auto-forwarded" failures onto a `$Transfer/$DeadLetterQueue` sub-buffer rather than the normal DLQ. Today an unknown forward target dead-letters on the source's regular DLQ with `ForwardingTargetNotFound` — reasonable simplification, but not Azure-accurate.
+4. **`GetQueueRuntimePropertiesAsync` / message counts.** `ActiveMessageCount`, `DeadLetterMessageCount`, `ScheduledMessageCount`, `TransferMessageCount`, `TransferDeadLetterMessageCount`. The SDK's admin client hits HTTP for these — see HTTP/UI plane below.
+5. **`MaxSizeInMegabytes` quota enforcement.** Sends past the configured size cap should fail with `QuotaExceededException`. Not enforced.
+6. **`AutoDeleteOnIdle`.** Entity self-deletion after an idle window. Niche.
+7. **Prefetch.** `ServiceBusReceiverOptions.PrefetchCount`. AMQPNetLite handles AMQP credit-flow so this likely just works, but worth a sanity test under high prefetch values.
+8. **SQL filter arithmetic.** Only if a real subscription rule needs it.
+9. **Deferred messages in `Peek`.** Real Service Bus surfaces deferred messages in peek output; we hide them. Cheap to add — include the `DeferredStore` snapshot in `MessageBuffer.Peek`'s result.
 
 ### HTTP / UI plane
 
-11. **HTTP management plane.** `ServiceBusAdministrationClient` (queue/topic/subscription/rule CRUD, `GetRuntimeProperties`) talks to a REST surface at `https://<namespace>.servicebus.windows.net/<entity>` — *not* AMQP. Today the emulator only speaks AMQP, so admin-client code paths are unusable against `LocalServer`. Adding a Kestrel listener that responds to the Atom-XML management API would unlock `ServiceBusAdministrationClient`, the Azure portal's Service Bus Explorer protocol, and the standalone Service Bus Explorer tool. Endpoints in scope: `GET/PUT/DELETE /<entity>` (entity description Atom feed), `GET /<entity>/messageCountDetails`, `GET /$Resources/queues`, `GET /<topic>/Subscriptions`, `GET/PUT /<topic>/Subscriptions/<sub>/Rules`.
-12. **Local UI.** Once the HTTP plane exists, a thin static dashboard (one HTML page served by the same Kestrel host) that lists queues/topics/subscriptions, shows per-entity message counts, peeks messages, and exposes a "send test message" form would make the emulator usable for ad-hoc poking without spinning up Azure-side tooling. Service Bus Explorer parity is the stretch goal; a minimal "what's in my queues right now" view is the MVP.
+10. **HTTP management plane.** `ServiceBusAdministrationClient` (queue/topic/subscription/rule CRUD, `GetRuntimeProperties`) talks to a REST surface at `https://<namespace>.servicebus.windows.net/<entity>` — *not* AMQP. Today the emulator only speaks AMQP, so admin-client code paths are unusable against `LocalServer`. Adding a Kestrel listener that responds to the Atom-XML management API would unlock `ServiceBusAdministrationClient`, the Azure portal's Service Bus Explorer protocol, and the standalone Service Bus Explorer tool. Endpoints in scope: `GET/PUT/DELETE /<entity>` (entity description Atom feed), `GET /<entity>/messageCountDetails`, `GET /$Resources/queues`, `GET /<topic>/Subscriptions`, `GET/PUT /<topic>/Subscriptions/<sub>/Rules`.
+11. **Local UI.** Once the HTTP plane exists, a thin static dashboard (one HTML page served by the same Kestrel host) that lists queues/topics/subscriptions, shows per-entity message counts, peeks messages, and exposes a "send test message" form would make the emulator usable for ad-hoc poking without spinning up Azure-side tooling. Service Bus Explorer parity is the stretch goal; a minimal "what's in my queues right now" view is the MVP.
