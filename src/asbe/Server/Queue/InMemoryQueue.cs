@@ -22,6 +22,7 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
     private readonly DeadLetterReceiver _deadLetterReceiver;
     private readonly ScheduledStore _scheduled;
     private readonly ExpiryStore _expiry;
+    private readonly DeferredStore _deferred;
     private readonly DuplicateDetectionWindow? _dedup;
     private readonly Func<string, Action<Message>?>? _forwardResolver;
     // Per-sequence reverse index: where the message lives so the expiry callback can
@@ -40,6 +41,7 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
         _deadLetterReceiver = new DeadLetterReceiver(_deadLetter);
         _scheduled = new ScheduledStore(Primary.AssignSequenceNumber, EnqueueFromScheduled, loggerFactory.CreateLogger<ScheduledStore>());
         _expiry = new ExpiryStore(OnExpired, loggerFactory.CreateLogger<ExpiryStore>());
+        _deferred = new DeferredStore(options.LockDuration, loggerFactory.CreateLogger<DeferredStore>());
         Sessions = new SessionStore(options.LockDuration, Primary, OnPrimaryLockExpired, loggerFactory);
         _dedup = options.RequiresDuplicateDetection
             ? new DuplicateDetectionWindow(options.DuplicateDetectionHistoryTimeWindow ?? TimeSpan.FromMinutes(1))
@@ -210,9 +212,47 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
         if (Primary.TryRelease(deliveryId, out var delivery)) Reroute(Primary, delivery);
     }
 
+    public void Defer(long deliveryId)
+    {
+        if (Primary.TryRelease(deliveryId, out var delivery)) DeferReleased(Primary, delivery);
+    }
+
     public void Reject(long deliveryId, DeadLetterInfo info)
     {
         if (Primary.TryRelease(deliveryId, out var delivery)) MoveToDeadLetter(Primary, delivery, info);
+    }
+
+    internal void DeferFromSession(Session session, Delivery delivery) => DeferReleased(session.Buffer, delivery);
+
+    private void DeferReleased(MessageBuffer source, Delivery delivery)
+    {
+        source.Drop(delivery.SequenceNumber);
+        CancelExpiry(delivery.SequenceNumber);
+        _deferred.Add(delivery.SequenceNumber, delivery.Message);
+    }
+
+    public bool TryReceiveDeferred(long sequenceNumber, out Message message, out Guid lockToken, out DateTime lockedUntil) =>
+        _deferred.TryAcquire(sequenceNumber, out message, out lockToken, out lockedUntil);
+
+    public bool CompleteDeferred(Guid lockToken) => _deferred.TryComplete(lockToken);
+
+    public bool AbandonDeferred(Guid lockToken)
+    {
+        if (!_deferred.TryAbandon(lockToken, out _)) return false;
+        return true;
+    }
+
+    public bool RejectDeferred(Guid lockToken, DeadLetterInfo info)
+    {
+        if (!_deferred.TryReject(lockToken, out var message, out _)) return false;
+        message.ApplicationProperties ??= new ApplicationProperties();
+        message.ApplicationProperties.Map["DeadLetterReason"] = info.Reason;
+        if (info.Description.Length > 0)
+            message.ApplicationProperties.Map["DeadLetterErrorDescription"] = info.Description;
+        message.Header = null;
+        message.MessageAnnotations?.Map.Remove(MessageBuffer.SequenceNumberAnnotation);
+        EnqueueDeadLetter(message);
+        return true;
     }
 
     public bool TryRenewLock(Guid lockToken, out DateTime expiresAt)
@@ -256,6 +296,7 @@ sealed class InMemoryQueue : IQueueEndpoint, IDisposable
         Sessions.Dispose();
         _scheduled.Dispose();
         _expiry.Dispose();
+        _deferred.Dispose();
         _deadLetter.Dispose();
         Primary.Dispose();
     }
@@ -296,6 +337,9 @@ sealed class DeadLetterReceiver(MessageBuffer buffer) : IQueueEndpoint
     {
         if (buffer.TryRelease(deliveryId, out var delivery)) buffer.Requeue(delivery);
     }
+    // Defer on a DLQ receiver isn't a meaningful Service Bus operation; treat as abandon
+    // (lock release + requeue) so the SDK's at-least-once contract holds.
+    public void Defer(long deliveryId) => Abandon(deliveryId);
     public void Reject(long deliveryId, DeadLetterInfo info)
     {
         if (buffer.TryRelease(deliveryId, out var delivery)) buffer.Drop(delivery.SequenceNumber);
@@ -328,6 +372,12 @@ sealed class SessionEndpoint(InMemoryQueue queue, Session session) : IQueueEndpo
     {
         if (session.Buffer.TryRelease(deliveryId, out var delivery))
             queue.RerouteSessionDelivery(session, delivery);
+    }
+
+    public void Defer(long deliveryId)
+    {
+        if (session.Buffer.TryRelease(deliveryId, out var delivery))
+            queue.DeferFromSession(session, delivery);
     }
 
     public void Reject(long deliveryId, DeadLetterInfo info)

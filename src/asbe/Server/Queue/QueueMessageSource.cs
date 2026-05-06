@@ -76,8 +76,10 @@ sealed class QueueMessageSource(IQueueEndpoint endpoint, TxnManager txnManager, 
                 _logger.LogTrace("Released (lock held until expiry) delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
                 break;
             case Modified modified when modified.UndeliverableHere:
-                _logger.LogTrace("Modified-undeliverable delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
-                endpoint.Reject(delivery.Id, DeadLetterInfo.DeadLetteredByReceiver);
+                // The Service Bus SDK uses Modified{UndeliverableHere=true} for
+                // DeferAsync. DeadLetter goes through Rejected with the DLQ error condition.
+                _logger.LogTrace("Defer delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);
+                endpoint.Defer(delivery.Id);
                 break;
             case Modified:
                 _logger.LogTrace("Modified (abandon) delivery={DeliveryId} seq={SequenceNumber}", delivery.Id, delivery.SequenceNumber);

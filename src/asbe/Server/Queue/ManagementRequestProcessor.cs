@@ -46,6 +46,8 @@ sealed class ManagementRequestProcessor : IRequestProcessor
     private const string AddRuleOperation = "com.microsoft:add-rule";
     private const string RemoveRuleOperation = "com.microsoft:remove-rule";
     private const string EnumerateRulesOperation = "com.microsoft:enumerate-rules";
+    private const string ReceiveBySequenceNumberOperation = "com.microsoft:receive-by-sequence-number";
+    private const string UpdateDispositionOperation = "com.microsoft:update-disposition";
 
     public int Credit => 100;
 
@@ -69,6 +71,8 @@ sealed class ManagementRequestProcessor : IRequestProcessor
                 AddRuleOperation => AddRule(requestContext.Message),
                 RemoveRuleOperation => RemoveRule(requestContext.Message),
                 EnumerateRulesOperation => EnumerateRules(requestContext.Message),
+                ReceiveBySequenceNumberOperation => ReceiveBySequenceNumber(requestContext.Message),
+                UpdateDispositionOperation => UpdateDisposition(requestContext.Message),
                 _ => Status(501, $"Operation '{op}' is not supported."),
             };
         }
@@ -250,6 +254,68 @@ sealed class ManagementRequestProcessor : IRequestProcessor
 
         if (entries.Count == 0) return Status(204, "No rules.");
         return Ok(new Map { ["rules"] = entries });
+    }
+
+    private Message ReceiveBySequenceNumber(Message request)
+    {
+        if (_queue is null) return Status(501, "ReceiveBySequenceNumber is not supported on this entity.");
+        if (request.Body is not Map body) return Status(400, "Missing receive-by-sequence-number body.");
+        if (body["sequence-numbers"] is not Array seqs) return Status(400, "Missing sequence-numbers.");
+
+        var entries = new List();
+        for (int i = 0; i < seqs.Length; i++)
+        {
+            if (seqs.GetValue(i) is not long seq) continue;
+            if (!_queue.TryReceiveDeferred(seq, out var message, out var lockToken, out var lockedUntil))
+                continue;
+            // The SDK reads LockedUntil from the AMQP MessageAnnotations on the encoded
+            // message, not from the response map. Stamp it before we encode.
+            message.MessageAnnotations ??= new Amqp.Framing.MessageAnnotations();
+            message.MessageAnnotations.Map[(Amqp.Types.Symbol)"x-opt-locked-until"] = lockedUntil;
+            var encoded = message.Encode();
+            var bytes = new byte[encoded.Length];
+            Buffer.BlockCopy(encoded.Buffer, encoded.Offset, bytes, 0, encoded.Length);
+            entries.Add(new Map
+            {
+                ["message"] = bytes,
+                ["lock-token"] = lockToken,
+            });
+        }
+
+        if (entries.Count == 0) return Status(204, "No messages found.");
+        return Ok(new Map { ["messages"] = entries });
+    }
+
+    private Message UpdateDisposition(Message request)
+    {
+        if (_queue is null) return Status(501, "UpdateDisposition is not supported on this entity.");
+        if (request.Body is not Map body) return Status(400, "Missing update-disposition body.");
+        if (body["lock-tokens"] is not Array tokens) return Status(400, "Missing lock-tokens.");
+        if (body["disposition-status"] is not string status) return Status(400, "Missing disposition-status.");
+
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            if (tokens.GetValue(i) is not Guid lockToken) return Status(400, "Lock token is not a uuid.");
+            bool ok = status switch
+            {
+                "completed" => _queue.CompleteDeferred(lockToken),
+                "abandoned" => _queue.AbandonDeferred(lockToken),
+                "defered" => true, // already deferred; lock is released by the next call too
+                "suspended" => _queue.RejectDeferred(lockToken, ReadDeadLetterInfo(body)),
+                _ => false,
+            };
+            if (!ok && status != "defered")
+                return Status(410, $"Lock token {lockToken} is no longer held.");
+            if (status == "defered") _queue.AbandonDeferred(lockToken);
+        }
+        return Status(200, "OK");
+    }
+
+    private static DeadLetterInfo ReadDeadLetterInfo(Map body)
+    {
+        var reason = body["deadletter-reason"] as string ?? "DeadLetteredByReceiver";
+        var description = body["deadletter-description"] as string ?? "";
+        return new DeadLetterInfo(reason, description);
     }
 
     private static Message Status(int code, string description) =>

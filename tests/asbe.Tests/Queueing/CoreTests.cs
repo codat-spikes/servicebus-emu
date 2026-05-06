@@ -405,4 +405,99 @@ public sealed class CoreTests
         Assert.Null(second);
     }
 
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task Defer_RemovesFromReadyQueue_AndReceiveBySequenceNumber_ReturnsIt(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.DefaultOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessageAsync(new ServiceBusMessage("defer-me"), ct);
+
+        await using var receiver = fx.Client.CreateReceiver(fx.Name);
+        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(msg);
+        var seq = msg!.SequenceNumber;
+        await receiver.DeferMessageAsync(msg, cancellationToken: ct);
+
+        var none = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2), ct);
+        Assert.Null(none);
+
+        var deferred = await receiver.ReceiveDeferredMessageAsync(seq, ct);
+        Assert.NotNull(deferred);
+        Assert.Equal("defer-me", deferred!.Body.ToString());
+        Assert.Equal(seq, deferred.SequenceNumber);
+
+        await receiver.CompleteMessageAsync(deferred, ct);
+        var stillNone = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2), ct);
+        Assert.Null(stillNone);
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task Defer_DeadLetter_MovesToDlq(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.DefaultOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessageAsync(new ServiceBusMessage("defer-then-dlq"), ct);
+
+        await using var receiver = fx.Client.CreateReceiver(fx.Name);
+        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(msg);
+        var seq = msg!.SequenceNumber;
+        await receiver.DeferMessageAsync(msg, cancellationToken: ct);
+
+        var deferred = await receiver.ReceiveDeferredMessageAsync(seq, ct);
+        Assert.NotNull(deferred);
+        await receiver.DeadLetterMessageAsync(deferred!, "DeferredDeadLetter", "from deferred", ct);
+
+        await using var dlq = fx.Client.CreateReceiver(fx.Name, new ServiceBusReceiverOptions
+        {
+            SubQueue = SubQueue.DeadLetter,
+        });
+        var dead = await dlq.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(dead);
+        Assert.Equal("defer-then-dlq", dead!.Body.ToString());
+        Assert.Equal("DeferredDeadLetter", dead.DeadLetterReason);
+        Assert.Equal("from deferred", dead.DeadLetterErrorDescription);
+        await dlq.CompleteMessageAsync(dead, ct);
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task Defer_ReceiveMultipleBySequenceNumber_ReturnsAll(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.DefaultOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessagesAsync(new[]
+        {
+            new ServiceBusMessage("a"),
+            new ServiceBusMessage("b"),
+            new ServiceBusMessage("c"),
+        }, ct);
+
+        await using var receiver = fx.Client.CreateReceiver(fx.Name);
+        var seqs = new List<long>();
+        for (var i = 0; i < 3; i++)
+        {
+            var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+            Assert.NotNull(msg);
+            seqs.Add(msg!.SequenceNumber);
+            await receiver.DeferMessageAsync(msg, cancellationToken: ct);
+        }
+
+        var deferred = await receiver.ReceiveDeferredMessagesAsync(seqs, ct);
+        Assert.Equal(3, deferred.Count);
+        Assert.Equal(new HashSet<string> { "a", "b", "c" }, deferred.Select(m => m.Body.ToString()).ToHashSet());
+
+        foreach (var d in deferred) await receiver.CompleteMessageAsync(d, ct);
+    }
 }
