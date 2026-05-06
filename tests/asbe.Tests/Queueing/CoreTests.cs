@@ -408,6 +408,38 @@ public sealed class CoreTests
     [Theory(Timeout = 60_000)]
     [Trait("Category", "Core")]
     [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
+    public async Task ReceiveAndDelete_DropsMessagesWithoutDisposition(Transport transport)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fx = await TestQueue.CreateAsync(transport, TestData.DefaultOptions, ct);
+
+        await using var sender = fx.Client.CreateSender(fx.Name);
+        await sender.SendMessagesAsync(new[]
+        {
+            new ServiceBusMessage("rad-1"),
+            new ServiceBusMessage("rad-2"),
+        }, ct);
+
+        await using var receiver = fx.Client.CreateReceiver(fx.Name, new ServiceBusReceiverOptions
+        {
+            ReceiveMode = ServiceBusReceiveMode.ReceiveAndDelete,
+        });
+        var first = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        var second = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.Equal(new[] { "rad-1", "rad-2" }, new[] { first!.Body.ToString(), second!.Body.ToString() });
+
+        // Reconnect with a peek-lock receiver and confirm the queue is empty —
+        // proves the broker dropped the messages on dispatch (no lock held).
+        await using var verifier = fx.Client.CreateReceiver(fx.Name);
+        var none = await verifier.ReceiveMessageAsync(TimeSpan.FromSeconds(2), ct);
+        Assert.Null(none);
+    }
+
+    [Theory(Timeout = 60_000)]
+    [Trait("Category", "Core")]
+    [MemberData(nameof(TestData.Transports), MemberType = typeof(TestData))]
     public async Task Defer_RemovesFromReadyQueue_AndReceiveBySequenceNumber_ReturnsIt(Transport transport)
     {
         var ct = TestContext.Current.CancellationToken;

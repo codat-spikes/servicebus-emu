@@ -22,6 +22,12 @@ sealed class QueueMessageSource(IQueueEndpoint endpoint, TxnManager txnManager, 
         var delivery = await endpoint.DequeueAsync(_cts.Token);
         _logger.LogTrace("Dispatch link={Link} delivery={DeliveryId} seq={SequenceNumber} count={DeliveryCount}",
             link.Name, delivery.Id, delivery.SequenceNumber, delivery.DeliveryCount);
+        // ReceiveAndDelete attaches with sender-settle-mode = settled. The broker
+        // stamps `settled=true` on the Transfer (AMQPNetLite handles this from
+        // link.SettleOnSend), so no disposition will come back. Settle the lock
+        // immediately — the message is gone from the broker's perspective the
+        // moment it leaves the wire.
+        if (link.SettleOnSend) endpoint.Complete(delivery.Id);
         return new ReceiveContext(link, delivery.Message) { UserToken = delivery };
     }
 
