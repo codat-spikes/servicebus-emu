@@ -227,8 +227,14 @@ internal static class LocalServer
 {
     private static readonly Lock _gate = new();
     private static AmqpServer? _server;
+    private static HttpManagementListener? _httpListener;
 
     public static AmqpServer Server => _server ?? throw new InvalidOperationException("LocalServer not started.");
+
+    // Base URI of the local HTTP management plane, e.g. "http://127.0.0.1:5300/". Tests
+    // that exercise ServiceBusAdministrationClient go through `LocalAdmin.CreateClient`
+    // which points the SDK at this URI via a custom HttpPipelineTransport.
+    public static string HttpBaseUri => _httpListener?.BaseUri ?? throw new InvalidOperationException("LocalServer not started.");
 
     public static void EnsureStarted()
     {
@@ -247,6 +253,8 @@ internal static class LocalServer
             }
             _server = new AmqpServer(lf);
             _server.Start();
+            _httpListener = new HttpManagementListener(_server, port: HttpManagementListener.DefaultPort, host: "127.0.0.1", loggerFactory: lf);
+            _httpListener.StartAsync().GetAwaiter().GetResult();
         }
     }
 }

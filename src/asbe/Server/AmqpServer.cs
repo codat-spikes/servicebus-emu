@@ -78,6 +78,24 @@ sealed class AmqpServer : IAsyncDisposable
     public IReadOnlyList<string> ListTopicNames() =>
         _queues.EnumerateTopics().Select(kv => kv.Key).ToArray();
 
+    // Richer accessors used by the HTTP management plane to project entities into
+    // Atom-XML. Returns the underlying entity so the caller can read both Options and
+    // a runtime snapshot in one shot, without mismatched lookups across the registry.
+    internal bool TryGetQueueEntity(string name, out InMemoryQueue queue) =>
+        _queues.TryGetQueue(name, out queue);
+
+    internal bool TryGetTopicEntity(string name, out Topic topic) =>
+        _queues.TryGetTopic(name, out topic);
+
+    internal bool TryGetSubscriptionEntity(string topic, string subscription, out InMemoryQueue queue) =>
+        _queues.TryGetSubscription(topic, subscription, out queue);
+
+    internal IReadOnlyList<KeyValuePair<string, InMemoryQueue>> EnumerateQueueEntities() =>
+        _queues.EnumerateQueues();
+
+    internal IReadOnlyList<KeyValuePair<string, Topic>> EnumerateTopicEntities() =>
+        _queues.EnumerateTopics();
+
     public bool DeleteQueue(string name)
     {
         // We deliberately don't call _host.UnregisterRequestProcessor here. AmqpNetLite's

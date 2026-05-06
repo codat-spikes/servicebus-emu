@@ -87,6 +87,18 @@ foreach (var t in asbe.Topics)
 log.LogInformation("Starting server on port {Port}", port);
 server.Start();
 
+var httpPort = config.GetValue<int?>("Asbe:HttpPort") ?? HttpManagementListener.DefaultPort;
+HttpManagementListener? httpListener = null;
+if (httpPort > 0)
+{
+    httpListener = new HttpManagementListener(server, httpPort, host, loggerFactory);
+    await httpListener.StartAsync();
+}
+else
+{
+    log.LogInformation("HTTP management plane disabled (Asbe:HttpPort=0)");
+}
+
 log.LogInformation("asbe ready — press Ctrl+C to stop");
 var stop = new TaskCompletionSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.TrySetResult(); };
@@ -94,4 +106,5 @@ AppDomain.CurrentDomain.ProcessExit += (_, _) => stop.TrySetResult();
 await stop.Task;
 log.LogInformation("Shutting down");
 tracerProvider?.Dispose();
+if (httpListener is not null) await httpListener.DisposeAsync();
 await server.DisposeAsync();

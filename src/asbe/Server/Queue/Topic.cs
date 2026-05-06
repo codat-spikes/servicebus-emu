@@ -15,6 +15,7 @@ sealed class Topic : IDisposable
     private static readonly Symbol ScheduledEnqueueTimeAnnotation = "x-opt-scheduled-enqueue-time";
 
     public string Name { get; }
+    public TopicOptions Options { get; }
     public IReadOnlyDictionary<string, InMemoryQueue> Subscriptions => _subscriptions;
     public IReadOnlyDictionary<string, SubscriptionRules> Rules => _subscriptionRules;
     public DateTimeOffset CreatedAt { get; }
@@ -33,6 +34,7 @@ sealed class Topic : IDisposable
     {
         loggerFactory ??= NullLoggerFactory.Instance;
         Name = name;
+        Options = options;
         _logger = loggerFactory.CreateLogger<Topic>();
         _subscriptions = new Dictionary<string, InMemoryQueue>(options.Subscriptions.Count, StringComparer.Ordinal);
         _subscriptionRules = new Dictionary<string, SubscriptionRules>(options.Subscriptions.Count, StringComparer.Ordinal);
