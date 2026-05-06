@@ -17,3 +17,6 @@
 
 # Local config
 appsettings.test.json
+
+# Claude Code worktrees
+.claude/worktrees/
