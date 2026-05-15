@@ -9,7 +9,7 @@
 [Tt]est[Rr]esult*/
 *.trx
 *.coverage
-*.coveragexml
+*.coveragexmlP
 *.lscache
 
 # Rider / VS
