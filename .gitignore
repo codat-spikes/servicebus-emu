@@ -10,6 +10,7 @@
 *.trx
 *.coverage
 *.coveragexml
+*.lscache
 
 # Rider / VS
 .idea/
